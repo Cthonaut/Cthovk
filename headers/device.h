@@ -13,6 +13,13 @@
 namespace Cthovk
 {
 
+struct QueueObj
+{
+    VkQueue graphics;
+    VkQueue present;
+    VkQueue compute;
+};
+
 class Device
 {
   private:
@@ -34,7 +41,9 @@ class Device
     VkInstance instance;
     VkSurfaceKHR surface;
     VkPhysicalDevice phyDevice;
+    VkDevice logDevice;
 
+    QueueObj queues;
     VkSampleCountFlags multiCounts;
     bool enableValidationLayers = false;
     std::vector<const char *> windowApiExtensions;
@@ -43,6 +52,7 @@ class Device
     void initValidationLayers();
     std::function<void(VkInstance instance, VkSurfaceKHR *surface)> initSurface;
     void selectGPU();
+    void initLogDevice();
     void cleanup();
 };
 

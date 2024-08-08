@@ -169,12 +169,63 @@ void Device::selectGPU()
                   physicalDeviceProperties.limits.framebufferDepthSampleCounts;
 }
 
+void Device::initLogDevice()
+{
+    std::vector<uint32_t> queueFamilies;
+    getQueueFamilies(phyDevice, surface, &queueFamilies, true);
+    VkDeviceQueueCreateInfo queueCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+        .queueCount = 1,
+        .pQueuePriorities = new float(1.0f),
+    };
+    std::vector<VkDeviceQueueCreateInfo> queueCreateInfos(queueFamilies.size());
+    for (uint32_t i{0}; i < queueFamilies.size(); i++)
+    {
+        queueCreateInfos[i] = queueCreateInfo;
+        queueCreateInfos[i].queueFamilyIndex = queueFamilies[i];
+    }
+
+    VkDeviceCreateInfo logDeviceInfo{
+        .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+        .queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size()),
+        .pQueueCreateInfos = queueCreateInfos.data(),
+        .enabledLayerCount = 0,
+        .enabledExtensionCount = static_cast<uint32_t>(deviceExt.size()),
+        .ppEnabledExtensionNames = deviceExt.data(),
+        .pEnabledFeatures = new VkPhysicalDeviceFeatures(),
+    };
+    if (enableValidationLayers)
+    {
+        logDeviceInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
+        logDeviceInfo.ppEnabledLayerNames = validationLayers.data();
+    }
+    vkCheck(vkCreateDevice(phyDevice, &logDeviceInfo, nullptr, &logDevice), "failed to initialize logic device");
+
+    // retrieve queue handle
+    vkGetDeviceQueue(logDevice, queueFamilies[0], 0, &queues.graphics);
+    queues.present = queues.graphics;
+    queues.compute = queues.graphics;
+    if (queueFamilies[1] != queueFamilies[0])
+    {
+        vkGetDeviceQueue(logDevice, queueFamilies[1], 0, &queues.present);
+    }
+    if (queueFamilies[2] != queueFamilies[0] && queueFamilies[2] != queueFamilies[1])
+    {
+        vkGetDeviceQueue(logDevice, queueFamilies[2], 0, &queues.compute);
+    }
+    else if (queueFamilies[2] != queueFamilies[0])
+    {
+        queues.compute = queues.present;
+    }
+}
+
 void Device::cleanup()
 {
     if (enableValidationLayers)
     {
         vkDestroyDebugReportCallbackEXT(instance, callback, nullptr);
     }
+    vkDestroyDevice(logDevice, nullptr);
     vkDestroySurfaceKHR(instance, surface, nullptr);
     vkDestroyInstance(instance, nullptr);
 }
