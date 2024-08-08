@@ -38,32 +38,10 @@ class Device
         VkQueue compute;
     };
 
-    struct SwapChainObj
-    {
-        VkSwapchainKHR SwapChain;
-        std::vector<VkImage> images;
-        std::vector<VkImageView> imageViews;
-        VkFormat format;
-        VkExtent2D extent;
-
-        void initSwapChain(Device *pDevice);
-
-        void cleanup(VkDevice logDevice)
-        {
-            for (size_t i{0}; i < imageViews.size(); i++)
-            {
-                vkDestroyImageView(logDevice, imageViews[i], nullptr);
-            }
-
-            vkDestroySwapchainKHR(logDevice, SwapChain, nullptr);
-        }
-    };
-
     VkInstance instance;
     VkSurfaceKHR surface;
     VkPhysicalDevice phyDevice;
     VkDevice logDevice;
-    SwapChainObj scResources;
 
     QueueObj queues;
     VkSampleCountFlags multiCounts;
