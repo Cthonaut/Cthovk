@@ -1,5 +1,4 @@
 #include "../headers/device.h"
-#include <vulkan/vulkan_core.h>
 
 namespace Cthovk
 {
@@ -99,6 +98,7 @@ void Device::cleanup()
     {
         vkDestroyDebugReportCallbackEXT(instance, callback, nullptr);
     }
+    vkDestroySurfaceKHR(instance, surface, nullptr);
     vkDestroyInstance(instance, nullptr);
 }
 

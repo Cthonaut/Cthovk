@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <stdint.h>
 #include <vector>
@@ -15,6 +16,8 @@ namespace Cthovk
 class Device
 {
   private:
+    std::vector<const char *> validationLayers = {"VK_LAYER_KHRONOS_validation"};
+
     static bool standardCstringComp(const char *a, const char *b)
     {
         return std::strcmp(a, b) < 0;
@@ -28,13 +31,14 @@ class Device
 
   public:
     VkInstance instance;
+    VkSurfaceKHR surface;
 
     bool enableValidationLayers = false;
-    std::vector<const char *> validationLayers;
     std::vector<const char *> windowApiExtensions;
 
     void initInstance();
     void initValidationLayers();
+    std::function<void()> initSurface;
     void cleanup();
 };
 

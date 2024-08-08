@@ -15,6 +15,7 @@ void Application::initVulkan()
     device.initInstance();
     if (device.enableValidationLayers)
         device.initValidationLayers();
+    device.initSurface();
 }
 
 void Application::loop()
