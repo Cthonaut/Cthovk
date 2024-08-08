@@ -17,6 +17,8 @@ void Application::initVulkan()
         device.initValidationLayers();
     device.initSurface(device.instance, &device.surface);
     device.selectGPU();
+    device.initLogDevice();
+    device.scResources.initSwapChain(&device);
 }
 
 void Application::loop()

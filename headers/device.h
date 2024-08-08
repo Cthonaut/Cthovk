@@ -13,18 +13,11 @@
 namespace Cthovk
 {
 
-struct QueueObj
-{
-    VkQueue graphics;
-    VkQueue present;
-    VkQueue compute;
-};
-
 class Device
 {
   private:
     std::vector<const char *> validationLayers = {"VK_LAYER_KHRONOS_validation"};
-    std::vector<const char *> deviceExt;
+    std::vector<const char *> deviceExt = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
     static bool standardCstringComp(const char *a, const char *b)
     {
@@ -38,21 +31,52 @@ class Device
     PFN_vkDestroyDebugReportCallbackEXT vkDestroyDebugReportCallbackEXT;
 
   public:
+    struct QueueObj
+    {
+        VkQueue graphics;
+        VkQueue present;
+        VkQueue compute;
+    };
+
+    struct SwapChainObj
+    {
+        VkSwapchainKHR SwapChain;
+        std::vector<VkImage> images;
+        std::vector<VkImageView> imageViews;
+        VkFormat format;
+        VkExtent2D extent;
+
+        void initSwapChain(Device *pDevice);
+
+        void cleanup(VkDevice logDevice)
+        {
+            for (size_t i{0}; i < imageViews.size(); i++)
+            {
+                vkDestroyImageView(logDevice, imageViews[i], nullptr);
+            }
+
+            vkDestroySwapchainKHR(logDevice, SwapChain, nullptr);
+        }
+    };
+
     VkInstance instance;
     VkSurfaceKHR surface;
     VkPhysicalDevice phyDevice;
     VkDevice logDevice;
+    SwapChainObj scResources;
 
     QueueObj queues;
     VkSampleCountFlags multiCounts;
-    bool enableValidationLayers = false;
     std::vector<const char *> windowApiExtensions;
+
+    bool enableValidationLayers{false};
 
     void initInstance();
     void initValidationLayers();
     std::function<void(VkInstance instance, VkSurfaceKHR *surface)> initSurface;
     void selectGPU();
     void initLogDevice();
+    std::function<void(uint32_t *width, uint32_t *height)> getFrameBufferSize;
     void cleanup();
 };
 

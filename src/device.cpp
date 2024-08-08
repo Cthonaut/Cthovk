@@ -1,4 +1,5 @@
 #include "../headers/device.h"
+#include <vulkan/vulkan_core.h>
 
 namespace Cthovk
 {
@@ -9,14 +10,14 @@ void Device::initInstance()
     {
         // sort Validation Layers for comparing
         std::sort(validationLayers.begin(), validationLayers.end(), standardCstringComp);
-        uint32_t vlCount = validationLayers.size();
+        uint8_t vlCount = validationLayers.size();
 
         uint32_t layerCount;
         vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
         std::vector<VkLayerProperties> availableLayers(layerCount);
         vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
         std::vector<const char *> availableLayersNames(layerCount);
-        for (uint32_t i{0}; i < layerCount; i++)
+        for (uint8_t i{0}; i < layerCount; i++)
         {
             availableLayersNames[i] = availableLayers[i].layerName;
         }
@@ -24,15 +25,15 @@ void Device::initInstance()
                   standardCstringComp); // sorting for comparing
 
         // comparing
-        uint32_t layersMatching{0};
-        for (uint32_t i{0}; i < layerCount && layersMatching < vlCount; i++)
+        uint8_t layersMatching{0};
+        for (uint8_t i{0}; i < layerCount && layersMatching < vlCount; i++)
         {
             uint32_t vlNameLength = strlen(validationLayers[layersMatching]);
             if (strlen(availableLayersNames[i]) != vlNameLength)
                 continue;
 
-            bool skip = false;
-            for (uint32_t j{0}; j < vlNameLength; j++)
+            bool skip{false};
+            for (uint8_t j{0}; j < vlNameLength; j++)
             {
                 if (validationLayers[layersMatching][j] != availableLayersNames[i][j])
                 {
@@ -96,9 +97,9 @@ void Device::selectGPU()
 {
     phyDevice = VK_NULL_HANDLE;
     std::sort(deviceExt.begin(), deviceExt.end(), standardCstringComp);
-    uint32_t devExtCount = deviceExt.size();
+    uint8_t devExtCount = deviceExt.size();
 
-    uint32_t deviceCount = 0;
+    uint32_t deviceCount{0};
     vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
     if (deviceCount == 0)
         throw std::runtime_error("found no GPUs");
@@ -106,7 +107,7 @@ void Device::selectGPU()
     vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
 
     // select suitable GPUs
-    for (uint32_t i{0}; i < deviceCount; i++)
+    for (uint8_t i{0}; i < deviceCount; i++)
     {
         if (!getQueueFamilies(devices[i], surface, nullptr))
             continue;
@@ -116,21 +117,21 @@ void Device::selectGPU()
         std::vector<VkExtensionProperties> availableExt(extensionCount);
         vkEnumerateDeviceExtensionProperties(devices[i], nullptr, &extensionCount, availableExt.data());
         std::vector<const char *> availableExtNames(extensionCount);
-        for (uint32_t j{0}; j < extensionCount; j++)
+        for (uint8_t j{0}; j < extensionCount; j++)
         {
             availableExtNames[j] = availableExt[j].extensionName;
         }
         std::sort(availableExtNames.begin(), availableExtNames.end(),
                   standardCstringComp); // sort for comparing
 
-        uint32_t extMatching{0};
-        for (uint32_t k{0}; k < extensionCount && extMatching < devExtCount; k++)
+        uint8_t extMatching{0};
+        for (uint8_t k{0}; k < extensionCount && extMatching < devExtCount; k++)
         {
-            uint32_t extensionNameLength = strlen(deviceExt[extMatching]);
+            uint8_t extensionNameLength = strlen(deviceExt[extMatching]);
             if (strlen(availableExtNames[k]) != extensionNameLength)
                 continue;
-            bool skip = false;
-            for (uint32_t j{0}; j < extensionNameLength; j++)
+            bool skip{false};
+            for (uint8_t j{0}; j < extensionNameLength; j++)
             {
                 if (deviceExt[extMatching][j] != availableExtNames[k][j])
                 {
@@ -179,7 +180,7 @@ void Device::initLogDevice()
         .pQueuePriorities = new float(1.0f),
     };
     std::vector<VkDeviceQueueCreateInfo> queueCreateInfos(queueFamilies.size());
-    for (uint32_t i{0}; i < queueFamilies.size(); i++)
+    for (uint8_t i{0}; i < queueFamilies.size(); i++)
     {
         queueCreateInfos[i] = queueCreateInfo;
         queueCreateInfos[i].queueFamilyIndex = queueFamilies[i];
@@ -219,12 +220,101 @@ void Device::initLogDevice()
     }
 }
 
+void Device::SwapChainObj::initSwapChain(Device *pDevice)
+{
+    VkSurfaceCapabilitiesKHR capabilities;
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(pDevice->phyDevice, pDevice->surface, &capabilities);
+    uint32_t imageCount = capabilities.minImageCount + 1;
+    if (capabilities.maxImageCount > 0 && imageCount > capabilities.maxImageCount)
+    {
+        imageCount = capabilities.maxImageCount;
+    }
+
+    if (capabilities.currentExtent.width != UINT32_MAX)
+    {
+        extent = capabilities.currentExtent;
+    }
+    else
+    {
+        uint32_t width, height;
+        pDevice->getFrameBufferSize(&width, &height);
+        extent.width = std::clamp(width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
+        extent.height = std::clamp(height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
+    }
+
+    VkColorSpaceKHR colorSpace;
+    uint32_t availableFormatsCount;
+    vkGetPhysicalDeviceSurfaceFormatsKHR(pDevice->phyDevice, pDevice->surface, &availableFormatsCount, nullptr);
+    std::vector<VkSurfaceFormatKHR> availableFormats(availableFormatsCount);
+    vkGetPhysicalDeviceSurfaceFormatsKHR(pDevice->phyDevice, pDevice->surface, &availableFormatsCount,
+                                         availableFormats.data());
+    format = availableFormats[0].format;
+    colorSpace = availableFormats[0].colorSpace;
+    for (uint8_t i{0}; i < availableFormatsCount; i++)
+    {
+        if (availableFormats[i].format == VK_FORMAT_B8G8R8A8_SRGB &&
+            availableFormats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+        {
+            format = availableFormats[i].format;
+            colorSpace = availableFormats[i].colorSpace;
+        }
+    }
+
+    std::vector<uint32_t> queueFamilies;
+    getQueueFamilies(pDevice->phyDevice, pDevice->surface, &queueFamilies, true);
+
+    VkPresentModeKHR presentMode{VK_PRESENT_MODE_FIFO_KHR};
+    uint32_t presentModesCount;
+    vkGetPhysicalDeviceSurfacePresentModesKHR(pDevice->phyDevice, pDevice->surface, &presentModesCount, nullptr);
+    std::vector<VkPresentModeKHR> availablePresentModes(presentModesCount);
+    vkGetPhysicalDeviceSurfacePresentModesKHR(pDevice->phyDevice, pDevice->surface, &presentModesCount,
+                                              availablePresentModes.data());
+    bool foundPresentMode{false};
+    for (uint8_t i{0}; i < presentModesCount; i++)
+    {
+        if (availablePresentModes[i] == VK_PRESENT_MODE_MAILBOX_KHR)
+        {
+            presentMode = availablePresentModes[i];
+        }
+    }
+
+    // create swap chain
+    VkSwapchainCreateInfoKHR schInfo{
+        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+        .surface = pDevice->surface,
+        .minImageCount = imageCount,
+        .imageFormat = format,
+        .imageColorSpace = colorSpace,
+        .imageExtent = extent,
+        .imageArrayLayers = 1,
+        .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+        .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .preTransform = capabilities.currentTransform,
+        .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+        .presentMode = presentMode,
+        .clipped = VK_TRUE,
+        .oldSwapchain = VK_NULL_HANDLE,
+    };
+    if (queueFamilies.size() > 2)
+    {
+        schInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+        schInfo.queueFamilyIndexCount = queueFamilies.size();
+        schInfo.pQueueFamilyIndices = queueFamilies.data();
+    }
+    vkCheck(vkCreateSwapchainKHR(pDevice->logDevice, &schInfo, nullptr, &SwapChain), "failed to create swap chain");
+
+    vkGetSwapchainImagesKHR(pDevice->logDevice, SwapChain, &imageCount, nullptr);
+    images.resize(imageCount);
+    vkGetSwapchainImagesKHR(pDevice->logDevice, SwapChain, &imageCount, images.data());
+}
+
 void Device::cleanup()
 {
     if (enableValidationLayers)
     {
         vkDestroyDebugReportCallbackEXT(instance, callback, nullptr);
     }
+    scResources.cleanup(logDevice);
     vkDestroyDevice(logDevice, nullptr);
     vkDestroySurfaceKHR(instance, surface, nullptr);
     vkDestroyInstance(instance, nullptr);
@@ -233,7 +323,7 @@ void Device::cleanup()
 bool getQueueFamilies(VkPhysicalDevice device, VkSurfaceKHR surface, std::vector<uint32_t> *queueFamilies,
                       bool noDuplicates)
 {
-    uint32_t queueFamilyCount = 0;
+    uint32_t queueFamilyCount{0};
     vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
     std::vector<VkQueueFamilyProperties> queueFamiliesList(queueFamilyCount);
     vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamiliesList.data());
@@ -255,7 +345,7 @@ bool getQueueFamilies(VkPhysicalDevice device, VkSurfaceKHR surface, std::vector
     // find present family
     for (uint32_t i{0}; i < queueFamilyCount; i++)
     {
-        VkBool32 presentSupport = false;
+        VkBool32 presentSupport{false};
         vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &presentSupport);
         if (presentSupport)
         {
