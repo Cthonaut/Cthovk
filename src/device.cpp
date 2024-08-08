@@ -92,6 +92,83 @@ void Device::initValidationLayers()
             "failed to setup callback");
 }
 
+void Device::selectGPU()
+{
+    phyDevice = VK_NULL_HANDLE;
+    std::sort(deviceExt.begin(), deviceExt.end(), standardCstringComp);
+    uint32_t devExtCount = deviceExt.size();
+
+    uint32_t deviceCount = 0;
+    vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
+    if (deviceCount == 0)
+        throw std::runtime_error("found no GPUs");
+    std::vector<VkPhysicalDevice> devices(deviceCount);
+    vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
+
+    // select suitable GPUs
+    for (uint32_t i{0}; i < deviceCount; i++)
+    {
+        if (!getQueueFamilies(devices[i], surface, nullptr))
+            continue;
+
+        uint32_t extensionCount;
+        vkEnumerateDeviceExtensionProperties(devices[i], nullptr, &extensionCount, nullptr);
+        std::vector<VkExtensionProperties> availableExt(extensionCount);
+        vkEnumerateDeviceExtensionProperties(devices[i], nullptr, &extensionCount, availableExt.data());
+        std::vector<const char *> availableExtNames(extensionCount);
+        for (uint32_t j{0}; j < extensionCount; j++)
+        {
+            availableExtNames[j] = availableExt[j].extensionName;
+        }
+        std::sort(availableExtNames.begin(), availableExtNames.end(),
+                  standardCstringComp); // sort for comparing
+
+        uint32_t extMatching{0};
+        for (uint32_t k{0}; k < extensionCount && extMatching < devExtCount; k++)
+        {
+            uint32_t extensionNameLength = strlen(deviceExt[extMatching]);
+            if (strlen(availableExtNames[k]) != extensionNameLength)
+                continue;
+            bool skip = false;
+            for (uint32_t j{0}; j < extensionNameLength; j++)
+            {
+                if (deviceExt[extMatching][j] != availableExtNames[k][j])
+                {
+                    skip = true;
+                    break;
+                }
+            }
+            if (skip)
+                continue;
+            extMatching++;
+        }
+        if (extMatching != devExtCount || devExtCount > extensionCount)
+            continue;
+
+        uint32_t availableFormatsCount;
+        vkGetPhysicalDeviceSurfaceFormatsKHR(devices[i], surface, &availableFormatsCount, nullptr);
+        if (availableFormatsCount == 0)
+            continue;
+
+        uint32_t availablePresentModesCount;
+        vkGetPhysicalDeviceSurfacePresentModesKHR(devices[i], surface, &availablePresentModesCount, nullptr);
+        if (availablePresentModesCount == 0)
+            continue;
+
+        phyDevice = devices[i];
+        break;
+    }
+
+    if (phyDevice == VK_NULL_HANDLE)
+        throw std::runtime_error("sutable GPU not found");
+
+    // get multisampling cababilities
+    VkPhysicalDeviceProperties physicalDeviceProperties;
+    vkGetPhysicalDeviceProperties(phyDevice, &physicalDeviceProperties);
+    multiCounts = physicalDeviceProperties.limits.framebufferColorSampleCounts &
+                  physicalDeviceProperties.limits.framebufferDepthSampleCounts;
+}
+
 void Device::cleanup()
 {
     if (enableValidationLayers)
@@ -100,6 +177,62 @@ void Device::cleanup()
     }
     vkDestroySurfaceKHR(instance, surface, nullptr);
     vkDestroyInstance(instance, nullptr);
+}
+
+bool getQueueFamilies(VkPhysicalDevice device, VkSurfaceKHR surface, std::vector<uint32_t> *queueFamilies,
+                      bool noDuplicates)
+{
+    uint32_t queueFamilyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
+    std::vector<VkQueueFamilyProperties> queueFamiliesList(queueFamilyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamiliesList.data());
+
+    std::vector<uint32_t> *qf = new std::vector<uint32_t>();
+    if (queueFamilies != nullptr)
+        qf = queueFamilies;
+
+    // find graphics family
+    for (uint32_t i{0}; i < queueFamilyCount; i++)
+    {
+        if (queueFamiliesList[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+        {
+            qf->push_back(i);
+            break;
+        };
+    }
+
+    // find present family
+    for (uint32_t i{0}; i < queueFamilyCount; i++)
+    {
+        VkBool32 presentSupport = false;
+        vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &presentSupport);
+        if (presentSupport)
+        {
+            qf->push_back(i);
+            break;
+        }
+    }
+
+    // find compute family
+    for (uint32_t i{0}; i < queueFamilyCount; i++)
+    {
+        if (queueFamiliesList[i].queueFlags & VK_QUEUE_COMPUTE_BIT)
+        {
+            qf->push_back(i);
+            break;
+        }
+    }
+
+    if (noDuplicates)
+    {
+        std::sort(queueFamilies->begin(), queueFamilies->end());
+        queueFamilies->erase(unique(queueFamilies->begin(), queueFamilies->end()), queueFamilies->end());
+    }
+
+    // return if all found
+    if (qf->size() < 3)
+        return false;
+    return true;
 }
 
 void vkCheck(bool result, const char *error)

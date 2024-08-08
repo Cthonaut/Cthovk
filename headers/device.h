@@ -17,6 +17,7 @@ class Device
 {
   private:
     std::vector<const char *> validationLayers = {"VK_LAYER_KHRONOS_validation"};
+    std::vector<const char *> deviceExt;
 
     static bool standardCstringComp(const char *a, const char *b)
     {
@@ -32,17 +33,22 @@ class Device
   public:
     VkInstance instance;
     VkSurfaceKHR surface;
+    VkPhysicalDevice phyDevice;
 
+    VkSampleCountFlags multiCounts;
     bool enableValidationLayers = false;
     std::vector<const char *> windowApiExtensions;
 
     void initInstance();
     void initValidationLayers();
     std::function<void()> initSurface;
+    void selectGPU();
     void cleanup();
 };
 
 void vkCheck(bool result, const char *error = "");
+bool getQueueFamilies(VkPhysicalDevice device, VkSurfaceKHR surface, std::vector<uint32_t> *queueFamilies,
+                      bool noDuplicates = false);
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL callbackMessage(VkDebugReportFlagsEXT flags,
                                                       VkDebugReportObjectTypeEXT objectType, uint64_t object,
