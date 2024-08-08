@@ -1,4 +1,5 @@
 #include "../headers/device.h"
+#include <vulkan/vulkan_core.h>
 
 namespace Cthovk
 {
@@ -62,6 +63,43 @@ void Device::initInstance()
         instanceInfo.ppEnabledLayerNames = validationLayers.data();
     }
     vkCheck(vkCreateInstance(&instanceInfo, nullptr, &instance), "failed to create instance");
+}
+
+void Device::initValidationLayers()
+{
+    // get the functions for Validation Layers
+    vkCreateDebugReportCallbackEXT = reinterpret_cast<PFN_vkCreateDebugReportCallbackEXT>(
+        vkGetInstanceProcAddr(instance, "vkCreateDebugReportCallbackEXT"));
+    vkDebugReportMessageEXT =
+        reinterpret_cast<PFN_vkDebugReportMessageEXT>(vkGetInstanceProcAddr(instance, "vkDebugReportMessageEXT"));
+    vkDestroyDebugReportCallbackEXT = reinterpret_cast<PFN_vkDestroyDebugReportCallbackEXT>(
+        vkGetInstanceProcAddr(instance, "vkDestroyDebugReportCallbackEXT"));
+    if (vkCreateDebugReportCallbackEXT == nullptr || vkDebugReportMessageEXT == nullptr ||
+        vkDestroyDebugReportCallbackEXT == nullptr)
+    {
+        throw std::runtime_error("failed to get report callback functions");
+    }
+
+    // create callback
+    VkDebugReportCallbackCreateInfoEXT callbackCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CREATE_INFO_EXT,
+        .pNext = nullptr,
+        .flags = VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT |
+                 VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT,
+        .pfnCallback = &callbackMessage,
+        .pUserData = nullptr,
+    };
+    vkCheck(vkCreateDebugReportCallbackEXT(instance, &callbackCreateInfo, nullptr, &callback),
+            "failed to setup callback");
+}
+
+void Device::cleanup()
+{
+    if (enableValidationLayers)
+    {
+        vkDestroyDebugReportCallbackEXT(instance, callback, nullptr);
+    }
+    vkDestroyInstance(instance, nullptr);
 }
 
 void vkCheck(bool result, const char *error)
