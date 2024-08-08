@@ -41,7 +41,7 @@ class Device
 
     void initInstance();
     void initValidationLayers();
-    std::function<void()> initSurface;
+    std::function<void(VkInstance instance, VkSurfaceKHR *surface)> initSurface;
     void selectGPU();
     void cleanup();
 };

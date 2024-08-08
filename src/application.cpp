@@ -15,7 +15,8 @@ void Application::initVulkan()
     device.initInstance();
     if (device.enableValidationLayers)
         device.initValidationLayers();
-    device.initSurface();
+    device.initSurface(device.instance, &device.surface);
+    device.selectGPU();
 }
 
 void Application::loop()
