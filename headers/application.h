@@ -1,6 +1,6 @@
 #pragma once
 
-#include "device.h"
+#include "graphicspl.h"
 
 namespace Cthovk
 {
@@ -30,6 +30,8 @@ class Application
 {
   private:
     SwapChainObj scResources;
+    ShaderObj *vertexShader;
+    ShaderObj *fragmentShader;
 
     void initVulkan();
     void loop();
@@ -37,6 +39,10 @@ class Application
 
   public:
     Device device;
+    GraphicsPipeline graphics;
+
+    std::string vertShaderLocation;
+    std::string fragShaderLocation;
 
     void run();
 };

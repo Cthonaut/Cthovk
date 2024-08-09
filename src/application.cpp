@@ -1,5 +1,4 @@
 #include "../headers/application.h"
-#include <vulkan/vulkan_core.h>
 
 namespace Cthovk
 {
@@ -141,6 +140,9 @@ void Application::initVulkan()
 
     scResources.initSwapChain(&device);
     scResources.initImageViews(device.logDevice);
+
+    vertexShader = new ShaderObj(device.logDevice, vertShaderLocation.data(), VK_SHADER_STAGE_VERTEX_BIT);
+    fragmentShader = new ShaderObj(device.logDevice, fragShaderLocation.data(), VK_SHADER_STAGE_FRAGMENT_BIT);
 }
 
 void Application::loop()
@@ -149,6 +151,8 @@ void Application::loop()
 
 void Application::cleanup()
 {
+    vertexShader->cleanup(device.logDevice);
+    fragmentShader->cleanup(device.logDevice);
     scResources.cleanup(device.logDevice);
     device.cleanup();
 }

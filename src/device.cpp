@@ -1,5 +1,4 @@
 #include "../headers/device.h"
-#include <vulkan/vulkan_core.h>
 
 namespace Cthovk
 {
