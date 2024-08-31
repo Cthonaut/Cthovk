@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <stdexcept>
 #include <vector>
 
@@ -19,7 +20,12 @@ class Device
   private:
     VkInstance instance;
 
+    PFN_vkCreateDebugUtilsMessengerEXT vkCreateDebugUtilsMessengerEXT;
+    PFN_vkDestroyDebugUtilsMessengerEXT vkDestroyDebugUtilsMessengerEXT;
+    VkDebugUtilsMessengerEXT messenger{nullptr};
+
     void initInstance(bool enableValidationLayers, std::vector<const char *> validationLayers,
                       std::vector<const char *> windowApiExtensions);
+    void initValidationLayers();
 };
 } // namespace Cthovk
