@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <stdexcept>
 #include <vector>
@@ -14,11 +15,13 @@ namespace Cthovk
 class Device
 {
   public:
-    Device(bool enableVL, std::vector<const char *> vl, std::vector<const char *> windowExt);
+    Device(bool enableVL, std::vector<const char *> vl, std::vector<const char *> windowExt,
+           std::function<void(VkInstance instance, VkSurfaceKHR *surface)> initSurface);
     ~Device();
 
   private:
     VkInstance instance;
+    VkSurfaceKHR surface;
 
     PFN_vkCreateDebugUtilsMessengerEXT vkCreateDebugUtilsMessengerEXT;
     PFN_vkDestroyDebugUtilsMessengerEXT vkDestroyDebugUtilsMessengerEXT;

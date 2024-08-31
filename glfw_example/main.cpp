@@ -1,3 +1,4 @@
+#define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
 #include "../headers/application.h"
@@ -29,12 +30,17 @@ class GLFW
         std::vector<const char *> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
         return extensions;
     }
+
+    std::function<void(VkInstance instance, VkSurfaceKHR *surface)> initSurface = [&](VkInstance instance,
+                                                                                      VkSurfaceKHR *surface) {
+        glfwCreateWindowSurface(instance, window, nullptr, surface);
+    };
 };
 
 int main()
 {
     GLFW glfw(800, 800);
-    Cthovk::Application app(true, {"VK_LAYER_KHRONOS_validation"}, glfw.getExtensions());
+    Cthovk::Application app(true, {"VK_LAYER_KHRONOS_validation"}, glfw.getExtensions(), glfw.initSurface);
 
     try
     {

@@ -11,11 +11,13 @@ void vkCheck(bool result, const char *error)
     }
 }
 
-Device::Device(bool enableVL, std::vector<const char *> vl, std::vector<const char *> windowExt)
+Device::Device(bool enableVL, std::vector<const char *> vl, std::vector<const char *> windowExt,
+               std::function<void(VkInstance instance, VkSurfaceKHR *surface)> initSurface)
 {
     initInstance(enableVL, vl, windowExt);
     if (enableVL)
         initValidationLayers();
+    initSurface(instance, &surface);
 }
 
 void Device::initInstance(bool enableValidationLayers, std::vector<const char *> validationLayers,
@@ -111,6 +113,7 @@ void Device::initValidationLayers()
 
 Device::~Device()
 {
+    vkDestroySurfaceKHR(instance, surface, nullptr);
     if (messenger != nullptr)
     {
         vkDestroyDebugUtilsMessengerEXT(instance, messenger, nullptr);
