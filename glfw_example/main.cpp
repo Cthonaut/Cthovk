@@ -40,7 +40,8 @@ class GLFW
 int main()
 {
     GLFW glfw(800, 800);
-    Cthovk::Application app(true, {"VK_LAYER_KHRONOS_validation"}, glfw.getExtensions(), glfw.initSurface);
+    Cthovk::Application app(true, {"VK_LAYER_KHRONOS_validation"}, glfw.getExtensions(), glfw.initSurface,
+                            {VK_KHR_SWAPCHAIN_EXTENSION_NAME});
 
     try
     {

@@ -1,4 +1,6 @@
 #include "../headers/device.h"
+#include <cstdint>
+#include <vector>
 
 namespace Cthovk
 {
@@ -12,12 +14,14 @@ void vkCheck(bool result, const char *error)
 }
 
 Device::Device(bool enableVL, std::vector<const char *> vl, std::vector<const char *> windowExt,
-               std::function<void(VkInstance instance, VkSurfaceKHR *surface)> initSurface)
+               std::function<void(VkInstance instance, VkSurfaceKHR *surface)> initSurface,
+               std::vector<const char *> deviceExt)
 {
     initInstance(enableVL, vl, windowExt);
     if (enableVL)
         initValidationLayers();
     initSurface(instance, &surface);
+    selectGPU(deviceExt);
 }
 
 void Device::initInstance(bool enableValidationLayers, std::vector<const char *> validationLayers,
@@ -109,6 +113,105 @@ void Device::initValidationLayers()
     };
     vkCheck(vkCreateDebugUtilsMessengerEXT(instance, &callbackCreateInfo, nullptr, &messenger),
             "failed to setup callback");
+}
+
+uint32_t Device::rateGPU(VkPhysicalDevice device, std::vector<const char *> deviceExt)
+{
+    // check queueFamilies
+    uint32_t queueFamilyCount{0};
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
+    std::vector<VkQueueFamilyProperties> queueFamiliesList(queueFamilyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamiliesList.data());
+
+    bool foundGrFamilily{false};
+    bool foundPrFamilily{false};
+    bool foundCoFamilily{false};
+    for (uint32_t i{0}; i < queueFamilyCount; i++)
+    {
+        if (queueFamiliesList[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+        {
+            foundGrFamilily = true;
+        };
+        VkBool32 presentSupport{false};
+        vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &presentSupport);
+        if (presentSupport)
+        {
+            foundPrFamilily = true;
+        }
+        if (queueFamiliesList[i].queueFlags & VK_QUEUE_COMPUTE_BIT)
+        {
+            foundCoFamilily = true;
+        }
+    }
+
+    if (!foundCoFamilily || !foundPrFamilily || !foundGrFamilily)
+        return 0;
+
+    // check extensions
+    uint32_t extensionCount;
+    vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, nullptr);
+    std::vector<VkExtensionProperties> availableExt(extensionCount);
+    vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, availableExt.data());
+
+    uint8_t commonExtensions{0};
+    for (uint8_t i{0}; i < deviceExt.size(); i++)
+    {
+        for (uint16_t j{0}; j < extensionCount; j++)
+        {
+            if (std::strcmp(deviceExt[i], availableExt[j].extensionName) == 0)
+                commonExtensions++;
+        }
+    }
+    if (commonExtensions != deviceExt.size())
+        return 0;
+
+    // check formats
+    uint32_t availableFormatsCount;
+    vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &availableFormatsCount, nullptr);
+    if (availableFormatsCount == 0)
+        return 0;
+
+    uint32_t availablePresentModesCount;
+    vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &availablePresentModesCount, nullptr);
+    if (availablePresentModesCount == 0)
+        return 0;
+
+    // basic for now may change later
+    int32_t rating{1};
+    VkPhysicalDeviceProperties deviceProperties;
+    vkGetPhysicalDeviceProperties(device, &deviceProperties);
+    if (deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
+    {
+        rating += 1;
+    }
+    return rating;
+}
+
+void Device::selectGPU(std::vector<const char *> deviceExt)
+{
+    uint32_t deviceCount{0};
+    vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
+    if (deviceCount == 0)
+        throw std::runtime_error("found no GPUs");
+    std::vector<VkPhysicalDevice> devices(deviceCount);
+    vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
+
+    // select suitable GPUs
+    std::vector<uint32_t> ratings;
+    uint32_t maxRater{0};
+    for (uint8_t i{0}; i < deviceCount; i++)
+    {
+        ratings.push_back(rateGPU(devices[i], deviceExt));
+        if (ratings[i] > ratings[maxRater])
+        {
+            maxRater = i;
+        }
+    }
+
+    if (ratings[maxRater] == 0)
+        throw std::runtime_error("no suitable GPUs found");
+
+    phyDevice = devices[maxRater];
 }
 
 Device::~Device()
