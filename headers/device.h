@@ -4,6 +4,7 @@
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <set>
 #include <stdexcept>
 #include <vector>
 
@@ -24,6 +25,7 @@ class Device
     VkInstance instance;
     VkSurfaceKHR surface;
     VkPhysicalDevice phyDevice{VK_NULL_HANDLE};
+    VkDevice logDevice;
 
     PFN_vkCreateDebugUtilsMessengerEXT vkCreateDebugUtilsMessengerEXT;
     PFN_vkDestroyDebugUtilsMessengerEXT vkDestroyDebugUtilsMessengerEXT;
@@ -34,5 +36,6 @@ class Device
     void initValidationLayers();
     uint32_t rateGPU(VkPhysicalDevice device, std::vector<const char *> deviceExt);
     void selectGPU(std::vector<const char *> deviceExt);
+    void initLogDevice(bool useVL, std::vector<const char *> deviceExt, std::vector<const char *> validationLayers);
 };
 } // namespace Cthovk

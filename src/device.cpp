@@ -1,6 +1,4 @@
 #include "../headers/device.h"
-#include <cstdint>
-#include <vector>
 
 namespace Cthovk
 {
@@ -22,6 +20,7 @@ Device::Device(bool enableVL, std::vector<const char *> vl, std::vector<const ch
         initValidationLayers();
     initSurface(instance, &surface);
     selectGPU(deviceExt);
+    initLogDevice(enableVL, deviceExt, vl);
 }
 
 void Device::initInstance(bool enableValidationLayers, std::vector<const char *> validationLayers,
@@ -36,9 +35,9 @@ void Device::initInstance(bool enableValidationLayers, std::vector<const char *>
         vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
 
         uint8_t commonLayer{0};
-        for (uint8_t i{0}; i < validationLayers.size(); i++)
+        for (uint8_t i{0}; i < validationLayers.size(); ++i)
         {
-            for (uint16_t j{0}; j < layerCount; j++)
+            for (uint16_t j{0}; j < layerCount; ++j)
             {
                 if (std::strcmp(validationLayers[i], availableLayers[j].layerName) == 0)
                     commonLayer++;
@@ -126,7 +125,7 @@ uint32_t Device::rateGPU(VkPhysicalDevice device, std::vector<const char *> devi
     bool foundGrFamilily{false};
     bool foundPrFamilily{false};
     bool foundCoFamilily{false};
-    for (uint32_t i{0}; i < queueFamilyCount; i++)
+    for (uint32_t i{0}; i < queueFamilyCount; ++i)
     {
         if (queueFamiliesList[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
         {
@@ -154,9 +153,9 @@ uint32_t Device::rateGPU(VkPhysicalDevice device, std::vector<const char *> devi
     vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, availableExt.data());
 
     uint8_t commonExtensions{0};
-    for (uint8_t i{0}; i < deviceExt.size(); i++)
+    for (uint8_t i{0}; i < deviceExt.size(); ++i)
     {
-        for (uint16_t j{0}; j < extensionCount; j++)
+        for (uint16_t j{0}; j < extensionCount; ++j)
         {
             if (std::strcmp(deviceExt[i], availableExt[j].extensionName) == 0)
                 commonExtensions++;
@@ -211,11 +210,74 @@ void Device::selectGPU(std::vector<const char *> deviceExt)
     if (ratings[maxRater] == 0)
         throw std::runtime_error("no suitable GPUs found");
 
-    phyDevice = devices[maxRater];
+    phyDevice = devices[0];
+}
+
+void Device::initLogDevice(bool useVL, std::vector<const char *> deviceExt, std::vector<const char *> validationLayers)
+{
+    uint32_t queueFamilyCount{0};
+    vkGetPhysicalDeviceQueueFamilyProperties(phyDevice, &queueFamilyCount, nullptr);
+    std::vector<VkQueueFamilyProperties> queueFamiliesList(queueFamilyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(phyDevice, &queueFamilyCount, queueFamiliesList.data());
+
+    std::set<uint32_t> queueFamilies;
+    bool foundGrFamily{false};
+    bool foundPrFamily{false};
+    bool foundCoFamily{false};
+    for (uint32_t i{0}; i < queueFamilyCount; ++i)
+    {
+        if (queueFamiliesList[i].queueFlags & VK_QUEUE_GRAPHICS_BIT && !foundGrFamily)
+        {
+            queueFamilies.insert(i);
+            foundGrFamily = true;
+        };
+
+        if (!foundPrFamily)
+        {
+            VkBool32 presentSupport{false};
+            vkGetPhysicalDeviceSurfaceSupportKHR(phyDevice, i, surface, &presentSupport);
+            if (presentSupport)
+            {
+                queueFamilies.insert(i);
+                foundPrFamily = true;
+            }
+        }
+
+        if (queueFamiliesList[i].queueFlags & VK_QUEUE_COMPUTE_BIT && !foundCoFamily)
+        {
+            queueFamilies.insert(i);
+            foundCoFamily = true;
+        }
+    }
+
+    VkDeviceQueueCreateInfo queueCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+        .queueCount = 1,
+        .pQueuePriorities = new float(1.0f),
+    };
+    std::vector<VkDeviceQueueCreateInfo> queueCreateInfos(queueFamilies.size());
+    for (uint8_t i{0}; i < queueFamilies.size(); ++i)
+    {
+        queueCreateInfos[i] = queueCreateInfo;
+        queueCreateInfos[i].queueFamilyIndex = *(std::next(queueFamilies.begin(), i));
+    }
+
+    VkDeviceCreateInfo logDeviceInfo{
+        .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+        .queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size()),
+        .pQueueCreateInfos = queueCreateInfos.data(),
+        .enabledLayerCount = useVL ? static_cast<uint32_t>(validationLayers.size()) : 0,
+        .ppEnabledLayerNames = useVL ? validationLayers.data() : nullptr,
+        .enabledExtensionCount = static_cast<uint32_t>(deviceExt.size()),
+        .ppEnabledExtensionNames = deviceExt.data(),
+        .pEnabledFeatures = nullptr,
+    };
+    vkCheck(vkCreateDevice(phyDevice, &logDeviceInfo, nullptr, &logDevice), "failed to initialize logic device");
 }
 
 Device::~Device()
 {
+    vkDestroyDevice(logDevice, nullptr);
     vkDestroySurfaceKHR(instance, surface, nullptr);
     if (messenger != nullptr)
     {
