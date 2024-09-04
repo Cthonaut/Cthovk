@@ -35,13 +35,21 @@ class GLFW
                                                                                       VkSurfaceKHR *surface) {
         glfwCreateWindowSurface(instance, window, nullptr, surface);
     };
+
+    std::function<void(uint32_t &, uint32_t &)> getFrameBufferSize = [&](uint32_t &width, uint32_t &height) {
+        int widthS, heightS;
+        glfwGetFramebufferSize(window, &widthS, &heightS);
+        width = static_cast<uint32_t>(widthS);
+        height = static_cast<uint32_t>(heightS);
+    };
 };
 
 int main()
 {
     GLFW glfw(800, 800);
     Cthovk::Application app(true, {"VK_LAYER_KHRONOS_validation"}, glfw.getExtensions(), glfw.initSurface,
-                            {VK_KHR_SWAPCHAIN_EXTENSION_NAME});
+                            glfw.getFrameBufferSize, {VK_KHR_SWAPCHAIN_EXTENSION_NAME}, "shaders/shader.vert.spv",
+                            "shaders/shader.frag.spv");
 
     try
     {

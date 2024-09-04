@@ -23,6 +23,20 @@ Device::Device(bool enableVL, std::vector<const char *> vl, std::vector<const ch
     initLogDevice(enableVL, deviceExt, vl);
 }
 
+VkFormat Device::findDepthFormat()
+{
+    VkFormat candidates[3] = {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT};
+    for (uint32_t i{0}; i < 3; i++)
+    {
+        VkFormatProperties props;
+        vkGetPhysicalDeviceFormatProperties(phyDevice, candidates[i], &props);
+        if ((props.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) ==
+            VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)
+            return candidates[i];
+    }
+    throw std::runtime_error("failed to find supported format!");
+}
+
 void Device::initInstance(bool enableValidationLayers, std::vector<const char *> validationLayers,
                           std::vector<const char *> windowApiExtensions)
 {
@@ -122,28 +136,22 @@ uint32_t Device::rateGPU(VkPhysicalDevice device, std::vector<const char *> devi
     std::vector<VkQueueFamilyProperties> queueFamiliesList(queueFamilyCount);
     vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamiliesList.data());
 
-    bool foundGrFamilily{false};
-    bool foundPrFamilily{false};
-    bool foundCoFamilily{false};
+    bool foundGrFamily{false};
+    bool foundPrFamily{false};
+    bool foundCoFamily{false};
     for (uint32_t i{0}; i < queueFamilyCount; ++i)
     {
         if (queueFamiliesList[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
-        {
-            foundGrFamilily = true;
-        };
+            foundGrFamily = true;
         VkBool32 presentSupport{false};
         vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &presentSupport);
         if (presentSupport)
-        {
-            foundPrFamilily = true;
-        }
+            foundPrFamily = true;
         if (queueFamiliesList[i].queueFlags & VK_QUEUE_COMPUTE_BIT)
-        {
-            foundCoFamilily = true;
-        }
+            foundCoFamily = true;
     }
 
-    if (!foundCoFamilily || !foundPrFamilily || !foundGrFamilily)
+    if (!foundCoFamily || !foundPrFamily || !foundGrFamily)
         return 0;
 
     // check extensions
@@ -230,7 +238,7 @@ void Device::initLogDevice(bool useVL, std::vector<const char *> deviceExt, std:
         {
             queueFamilies.insert(i);
             foundGrFamily = true;
-        };
+        }
 
         if (!foundPrFamily)
         {

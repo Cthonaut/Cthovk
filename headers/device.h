@@ -16,6 +16,12 @@ namespace Cthovk
 class Device
 {
   public:
+    VkSurfaceKHR surface;
+    VkPhysicalDevice phyDevice{VK_NULL_HANDLE};
+    VkDevice logDevice;
+
+    VkFormat findDepthFormat();
+
     Device(bool enableVL, std::vector<const char *> vl, std::vector<const char *> windowExt,
            std::function<void(VkInstance instance, VkSurfaceKHR *surface)> initSurface,
            std::vector<const char *> deviceExt);
@@ -23,9 +29,6 @@ class Device
 
   private:
     VkInstance instance;
-    VkSurfaceKHR surface;
-    VkPhysicalDevice phyDevice{VK_NULL_HANDLE};
-    VkDevice logDevice;
 
     PFN_vkCreateDebugUtilsMessengerEXT vkCreateDebugUtilsMessengerEXT;
     PFN_vkDestroyDebugUtilsMessengerEXT vkDestroyDebugUtilsMessengerEXT;
