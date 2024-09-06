@@ -44,12 +44,18 @@ class Graphics
   public:
     Graphics(VkDevice logDevice, VkPhysicalDevice phyDevice, VkSurfaceKHR surface,
              std::function<void(uint32_t &width, uint32_t &height)> getFrameBufferSize, const char *vertShaderLocation,
-             const char *fragShaderLocation);
+             const char *fragShaderLocation, VkSampleCountFlagBits multiSampleCount, VkFormat depthFormat);
+    ~Graphics();
 
   private:
+    VkDevice logDevice;
     SwapChainObj sc;
     ShaderObj shaders[2];
     VkFormat depthformat;
+    VkRenderPass renderPass;
+
+    void initRenderPass(VkDevice logDevice, SwapChainObj &sc, VkSampleCountFlagBits multiSampleCount,
+                        VkFormat depthFormat);
 };
 
 } // namespace Cthovk

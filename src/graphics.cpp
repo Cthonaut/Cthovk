@@ -13,13 +13,99 @@ static void vkCheck(bool result, const char *error)
 
 Graphics::Graphics(VkDevice logDevice, VkPhysicalDevice phyDevice, VkSurfaceKHR surface,
                    std::function<void(uint32_t &width, uint32_t &height)> getFrameBufferSize,
-                   const char *vertShaderLocation, const char *fragShaderLocation)
-    : sc(logDevice, phyDevice, surface, getFrameBufferSize),
+                   const char *vertShaderLocation, const char *fragShaderLocation,
+                   VkSampleCountFlagBits multiSampleCount, VkFormat depthFormat)
+    : logDevice(logDevice), sc(logDevice, phyDevice, surface, getFrameBufferSize),
       shaders{
           ShaderObj(logDevice, vertShaderLocation, VK_SHADER_STAGE_VERTEX_BIT),
           ShaderObj(logDevice, fragShaderLocation, VK_SHADER_STAGE_FRAGMENT_BIT),
       }
 {
+    initRenderPass(logDevice, sc, multiSampleCount, depthFormat);
+}
+
+void Graphics::initRenderPass(VkDevice logDevice, SwapChainObj &sc, VkSampleCountFlagBits multiSampleCount,
+                              VkFormat depthFormat)
+{
+    VkAttachmentDescription color{
+        .format = sc.format,
+        .samples = multiSampleCount,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    };
+    VkAttachmentReference colorRef{
+        .attachment = 0,
+        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    };
+    VkAttachmentDescription depth{
+        .format = depthFormat,
+        .samples = multiSampleCount,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    };
+    VkAttachmentReference depthRef{
+        .attachment = 1,
+        .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    };
+
+    VkAttachmentDescription colorResolve{
+        .format = sc.format,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+    };
+    VkAttachmentReference colorRefResolve{
+        .attachment = 2,
+        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    };
+
+    VkSubpassDescription subpass{
+        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &colorRef,
+        .pResolveAttachments = multiSampleCount != VK_SAMPLE_COUNT_1_BIT ? &colorRefResolve : nullptr,
+        .pDepthStencilAttachment = &depthRef,
+    };
+    VkSubpassDependency dependency{
+        .srcSubpass = VK_SUBPASS_EXTERNAL,
+        .dstSubpass = 0,
+        .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+        .srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+    };
+
+    std::vector<VkAttachmentDescription> attachments = {color, depth};
+    if (multiSampleCount != VK_SAMPLE_COUNT_1_BIT)
+        attachments.push_back(colorResolve);
+
+    VkRenderPassCreateInfo renderPassInfo{
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+        .attachmentCount = static_cast<uint32_t>(attachments.size()),
+        .pAttachments = attachments.data(),
+        .subpassCount = 1,
+        .pSubpasses = &subpass,
+        .dependencyCount = 1,
+        .pDependencies = &dependency,
+    };
+    vkCheck(vkCreateRenderPass(logDevice, &renderPassInfo, nullptr, &renderPass), "failed to create RenderPass");
+}
+
+Graphics::~Graphics()
+{
+    vkDestroyRenderPass(logDevice, renderPass, nullptr);
 }
 
 SwapChainObj::SwapChainObj(VkDevice logDevice, VkPhysicalDevice phyDevice, VkSurfaceKHR surface,

@@ -34,7 +34,7 @@ VkFormat Device::findDepthFormat()
             VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)
             return candidates[i];
     }
-    throw std::runtime_error("failed to find supported format!");
+    throw std::runtime_error("failed to find supported depth format");
 }
 
 void Device::initInstance(bool enableValidationLayers, std::vector<const char *> validationLayers,
