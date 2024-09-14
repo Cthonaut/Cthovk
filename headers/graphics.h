@@ -69,6 +69,18 @@ struct BufferObj
                                     VkQueue graphicsQueue);
 };
 
+struct ImageObj
+{
+    VkImage image;
+    VkDeviceMemory memory;
+    VkImageView view;
+    VkDevice logDevice;
+
+    ImageObj(VkDevice logDevice, VkPhysicalDevice phyDevice, VkExtent2D extent, VkSampleCountFlagBits samples,
+             VkFormat format, VkImageUsageFlags usage, VkImageAspectFlags imageAspectFlag);
+    ~ImageObj();
+};
+
 struct Vertex
 {
     glm::vec3 pos;
@@ -108,6 +120,8 @@ class Graphics
     BufferObj index;
     std::vector<BufferObj *> pUniforms;
     std::vector<void *> uniformMemoryPointers;
+    ImageObj depth;
+    ImageObj color;
 
     void initRenderPass(VkDevice logDevice, SwapChainObj &sc, VkSampleCountFlagBits multiSampleCount,
                         VkFormat depthFormat);

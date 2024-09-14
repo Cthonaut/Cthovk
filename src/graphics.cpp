@@ -21,7 +21,11 @@ Graphics::Graphics(VkDevice logDevice, VkPhysicalDevice phyDevice, VkSurfaceKHR 
                                        graphicsQueue)),
       index(BufferObj::optimizeForGPU(logDevice, phyDevice, sizeof(inf.indicesDatas[0]) * inf.indicesDatas.size(),
                                       inf.indicesDatas.data(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, command,
-                                      graphicsQueue))
+                                      graphicsQueue)),
+      depth(logDevice, phyDevice, sc.extent, inf.multiSampleCount, depthFormat,
+            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT),
+      color(logDevice, phyDevice, sc.extent, inf.multiSampleCount, sc.format,
+            VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_IMAGE_ASPECT_COLOR_BIT)
 {
     ShaderObj vertexShader(logDevice, inf.vertShaderLocation, VK_SHADER_STAGE_VERTEX_BIT);
     ShaderObj fragmentShader(logDevice, inf.fragShaderLocation, VK_SHADER_STAGE_FRAGMENT_BIT);
@@ -125,6 +129,79 @@ Graphics::~Graphics()
     }
 }
 
+ImageObj::ImageObj(VkDevice logDevice, VkPhysicalDevice phyDevice, VkExtent2D extent, VkSampleCountFlagBits samples,
+                   VkFormat format, VkImageUsageFlags usage, VkImageAspectFlags imageAspectFlag)
+    : logDevice(logDevice)
+{
+    VkImageCreateInfo imageInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = format,
+        .extent = {extent.width, extent.height, 1},
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = samples,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = usage,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+
+    };
+    vkCheck(vkCreateImage(logDevice, &imageInfo, nullptr, &image), "failed to create image");
+
+    // find memory type
+    VkMemoryRequirements memRequirements;
+    vkGetImageMemoryRequirements(logDevice, image, &memRequirements);
+    uint32_t vbMemoryType;
+    bool vbMemoryTypeFound{false};
+    VkPhysicalDeviceMemoryProperties memProperties;
+    vkGetPhysicalDeviceMemoryProperties(phyDevice, &memProperties);
+    for (uint32_t i{0}; i < memProperties.memoryTypeCount; i++)
+    {
+        if ((memRequirements.memoryTypeBits & (1 << i)) &&
+            (memProperties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ==
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+        {
+            vbMemoryType = i;
+            vbMemoryTypeFound = true;
+        }
+    }
+
+    if (!vbMemoryTypeFound)
+        throw std::runtime_error("failed to find memory type for image");
+
+    VkMemoryAllocateInfo allocInfo{
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = memRequirements.size,
+        .memoryTypeIndex = vbMemoryType,
+    };
+    vkCheck(vkAllocateMemory(logDevice, &allocInfo, nullptr, &memory), "failed to allocate image memory");
+    vkBindImageMemory(logDevice, image, memory, 0);
+
+    VkImageViewCreateInfo viewInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = image,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = format,
+        .subresourceRange =
+            {
+                .aspectMask = imageAspectFlag,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+    };
+    vkCheck(vkCreateImageView(logDevice, &viewInfo, nullptr, &view), "failed to create image view");
+}
+
+ImageObj::~ImageObj()
+{
+    vkDestroyImageView(logDevice, view, nullptr);
+    vkDestroyImage(logDevice, image, nullptr);
+    vkFreeMemory(logDevice, memory, nullptr);
+}
+
 BufferObj::BufferObj(VkDevice logDevice, VkPhysicalDevice phyDevice, VkDeviceSize size, VkBufferUsageFlags usage,
                      VkMemoryPropertyFlags properties)
     : logDevice(logDevice)
@@ -162,7 +239,7 @@ BufferObj::BufferObj(VkDevice logDevice, VkPhysicalDevice phyDevice, VkDeviceSiz
         .allocationSize = memRequirements.size,
         .memoryTypeIndex = vbMemoryType,
     };
-    vkCheck(vkAllocateMemory(logDevice, &memInfo, nullptr, &memory), "failed to allocate vertex buffer memory!");
+    vkCheck(vkAllocateMemory(logDevice, &memInfo, nullptr, &memory), "failed to allocate vertex buffer memory");
 
     vkBindBufferMemory(logDevice, buffer, memory, 0);
 }
