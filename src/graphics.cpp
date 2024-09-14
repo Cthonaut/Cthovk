@@ -1,4 +1,5 @@
 #include "../headers/graphics.h"
+#include <strings.h>
 
 namespace Cthovk
 {
@@ -11,17 +12,29 @@ static void vkCheck(bool result, const char *error)
     }
 }
 
-Graphics::Graphics(VkDevice logDevice, VkPhysicalDevice phyDevice, VkSurfaceKHR surface,
-                   std::function<void(uint32_t &width, uint32_t &height)> getFrameBufferSize,
-                   const char *vertShaderLocation, const char *fragShaderLocation,
-                   VkSampleCountFlagBits multiSampleCount, VkFormat depthFormat)
-    : logDevice(logDevice), sc(logDevice, phyDevice, surface, getFrameBufferSize),
-      shaders{
-          ShaderObj(logDevice, vertShaderLocation, VK_SHADER_STAGE_VERTEX_BIT),
-          ShaderObj(logDevice, fragShaderLocation, VK_SHADER_STAGE_FRAGMENT_BIT),
-      }
+Graphics::Graphics(VkDevice logDevice, VkPhysicalDevice phyDevice, VkSurfaceKHR surface, VkFormat depthFormat,
+                   VkQueue graphicsQueue, GraphicsInfo inf)
+    : logDevice(logDevice), sc(logDevice, phyDevice, surface, inf.getFrameBufferSize),
+      command(logDevice, phyDevice, inf.framesInFlight),
+      vertex(BufferObj::optimizeForGPU(logDevice, phyDevice, sizeof(inf.verticesDatas[0]) * inf.verticesDatas.size(),
+                                       inf.verticesDatas.data(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, command,
+                                       graphicsQueue)),
+      index(BufferObj::optimizeForGPU(logDevice, phyDevice, sizeof(inf.indicesDatas[0]) * inf.indicesDatas.size(),
+                                      inf.indicesDatas.data(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, command,
+                                      graphicsQueue))
 {
-    initRenderPass(logDevice, sc, multiSampleCount, depthFormat);
+    ShaderObj vertexShader(logDevice, inf.vertShaderLocation, VK_SHADER_STAGE_VERTEX_BIT);
+    ShaderObj fragmentShader(logDevice, inf.fragShaderLocation, VK_SHADER_STAGE_FRAGMENT_BIT);
+    initRenderPass(logDevice, sc, inf.multiSampleCount, depthFormat);
+    pUniforms.resize(inf.framesInFlight);
+    uniformMemoryPointers.resize(inf.framesInFlight);
+    for (uint8_t i{0}; i < inf.framesInFlight; i++)
+    {
+        pUniforms[i] =
+            new BufferObj(logDevice, phyDevice, sizeof(UniformBufferObject), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        vkMapMemory(logDevice, pUniforms[i]->memory, 0, sizeof(UniformBufferObject), 0, &uniformMemoryPointers[i]);
+    }
 }
 
 void Graphics::initRenderPass(VkDevice logDevice, SwapChainObj &sc, VkSampleCountFlagBits multiSampleCount,
@@ -106,12 +119,161 @@ void Graphics::initRenderPass(VkDevice logDevice, SwapChainObj &sc, VkSampleCoun
 Graphics::~Graphics()
 {
     vkDestroyRenderPass(logDevice, renderPass, nullptr);
+    for (uint8_t i{0}; i < pUniforms.size(); i++)
+    {
+        delete pUniforms[i];
+    }
+}
+
+BufferObj::BufferObj(VkDevice logDevice, VkPhysicalDevice phyDevice, VkDeviceSize size, VkBufferUsageFlags usage,
+                     VkMemoryPropertyFlags properties)
+    : logDevice(logDevice)
+{
+    VkBufferCreateInfo bInfo{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = size,
+        .usage = usage,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
+    vkCheck(vkCreateBuffer(logDevice, &bInfo, nullptr, &buffer), "failed to create vertex buffer");
+
+    VkMemoryRequirements memRequirements;
+    vkGetBufferMemoryRequirements(logDevice, buffer, &memRequirements);
+
+    // find memory type
+    uint32_t vbMemoryType;
+    bool vbMemoryTypeFound{false};
+    VkPhysicalDeviceMemoryProperties memProperties;
+    vkGetPhysicalDeviceMemoryProperties(phyDevice, &memProperties);
+    for (uint32_t i{0}; i < memProperties.memoryTypeCount; i++)
+    {
+        if ((memRequirements.memoryTypeBits & (1 << i)) &&
+            (memProperties.memoryTypes[i].propertyFlags & properties) == properties)
+        {
+            vbMemoryType = i;
+            vbMemoryTypeFound = true;
+        }
+    }
+    if (!vbMemoryTypeFound)
+        throw std::runtime_error("failed to find memory type for buffer");
+
+    VkMemoryAllocateInfo memInfo{
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = memRequirements.size,
+        .memoryTypeIndex = vbMemoryType,
+    };
+    vkCheck(vkAllocateMemory(logDevice, &memInfo, nullptr, &memory), "failed to allocate vertex buffer memory!");
+
+    vkBindBufferMemory(logDevice, buffer, memory, 0);
+}
+
+BufferObj BufferObj::optimizeForGPU(VkDevice logDevice, VkPhysicalDevice phyDevice, VkDeviceSize size,
+                                    const void *inputData, VkBufferUsageFlagBits usageBit, CommandObj &command,
+                                    VkQueue graphicsQueue)
+{
+    // create buffer for storing
+    BufferObj staging(logDevice, phyDevice, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    void *data;
+    vkMapMemory(logDevice, staging.memory, 0, size, 0, &data);
+    memcpy(data, inputData, (size_t)size);
+    vkUnmapMemory(logDevice, staging.memory);
+
+    BufferObj result(logDevice, phyDevice, size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usageBit,
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    // copy buffers
+    VkCommandBufferAllocateInfo tempCBInfo{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = command.Pool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1,
+    };
+    VkCommandBuffer tempCB;
+    vkAllocateCommandBuffers(logDevice, &tempCBInfo, &tempCB);
+
+    VkCommandBufferBeginInfo beginInfo{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+    };
+    vkBeginCommandBuffer(tempCB, &beginInfo);
+
+    VkBufferCopy copyRegion{
+        .size = size,
+    };
+    vkCmdCopyBuffer(tempCB, staging.buffer, result.buffer, 1, &copyRegion);
+    vkEndCommandBuffer(tempCB);
+
+    VkSubmitInfo submitInfo{
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &tempCB,
+    };
+    vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(graphicsQueue);
+    vkFreeCommandBuffers(logDevice, command.Pool, 1, &tempCB);
+
+    return result;
+}
+
+BufferObj::~BufferObj()
+{
+    vkDestroyBuffer(logDevice, buffer, nullptr);
+    vkFreeMemory(logDevice, memory, nullptr);
+}
+
+CommandObj::CommandObj(VkDevice logDevice, VkPhysicalDevice phyDevice, uint32_t framesInFlight) : logDevice(logDevice)
+{
+    // get graphics family
+    uint32_t queueFamilyCount{0};
+    vkGetPhysicalDeviceQueueFamilyProperties(phyDevice, &queueFamilyCount, nullptr);
+    std::vector<VkQueueFamilyProperties> queueFamiliesList(queueFamilyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(phyDevice, &queueFamilyCount, queueFamiliesList.data());
+
+    uint32_t graphicsFamily;
+    bool foundGrFamily{false};
+    for (uint32_t i{0}; i < queueFamilyCount && !foundGrFamily; ++i)
+    {
+        if (queueFamiliesList[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+        {
+            graphicsFamily = i;
+            foundGrFamily = true;
+        }
+    }
+    if (!foundGrFamily)
+        throw std::runtime_error("failed to find graphics family for command pool");
+
+    VkCommandPoolCreateInfo poolInfo{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+        .queueFamilyIndex = graphicsFamily,
+    };
+    vkCheck(vkCreateCommandPool(logDevice, &poolInfo, nullptr, &Pool), "failed to create command pool");
+
+    Buffers.resize(framesInFlight);
+    VkCommandBufferAllocateInfo cbInfo{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = Pool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = framesInFlight,
+    };
+    vkCheck(vkAllocateCommandBuffers(logDevice, &cbInfo, Buffers.data()), "failed to create command buffers");
+}
+
+void CommandObj::record()
+{
+}
+
+CommandObj::~CommandObj()
+{
+    vkDestroyCommandPool(logDevice, Pool, nullptr);
 }
 
 SwapChainObj::SwapChainObj(VkDevice logDevice, VkPhysicalDevice phyDevice, VkSurfaceKHR surface,
                            std::function<void(uint32_t &width, uint32_t &height)> getFrameBufferSize)
+    : logDevice(logDevice)
 {
-    SwapChainObj::logDevice = logDevice;
     initSwapChain(phyDevice, surface, getFrameBufferSize);
     initImageViews();
 }
@@ -269,12 +431,12 @@ SwapChainObj::~SwapChainObj()
     vkDestroySwapchainKHR(logDevice, SwapChain, nullptr);
 }
 
-ShaderObj::ShaderObj(VkDevice logDevice, const char *shaderLocation, VkShaderStageFlagBits shaderStageBit)
+ShaderObj::ShaderObj(VkDevice logDevice, std::string shaderLocation, VkShaderStageFlagBits shaderStageBit)
+    : logDevice(logDevice), module(VK_NULL_HANDLE)
 {
-    ShaderObj::logDevice = logDevice;
     std::ifstream file(shaderLocation, std::ios::ate | std::ios::binary);
     if (!file.is_open())
-        throw std::runtime_error("failed to open shader file");
+        throw std::runtime_error("failed to open shader file: " + shaderLocation);
     uint32_t fileSize = (uint32_t)file.tellg();
     std::vector<char> shaderCode(fileSize);
     file.seekg(0);

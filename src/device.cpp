@@ -11,16 +11,14 @@ void vkCheck(bool result, const char *error)
     }
 }
 
-Device::Device(bool enableVL, std::vector<const char *> vl, std::vector<const char *> windowExt,
-               std::function<void(VkInstance instance, VkSurfaceKHR *surface)> initSurface,
-               std::vector<const char *> deviceExt)
+Device::Device(DeviceInfo inf)
 {
-    initInstance(enableVL, vl, windowExt);
-    if (enableVL)
+    initInstance(inf.enableVL, inf.vl, inf.windowExt);
+    if (inf.enableVL)
         initValidationLayers();
-    initSurface(instance, &surface);
-    selectGPU(deviceExt);
-    initLogDevice(enableVL, deviceExt, vl);
+    inf.initSurface(instance, &surface);
+    selectGPU(inf.deviceExt);
+    initLogDevice(inf.enableVL, inf.deviceExt, inf.vl);
 }
 
 VkFormat Device::findDepthFormat()
@@ -228,7 +226,7 @@ void Device::initLogDevice(bool useVL, std::vector<const char *> deviceExt, std:
     std::vector<VkQueueFamilyProperties> queueFamiliesList(queueFamilyCount);
     vkGetPhysicalDeviceQueueFamilyProperties(phyDevice, &queueFamilyCount, queueFamiliesList.data());
 
-    std::set<uint32_t> queueFamilies;
+    std::vector<uint32_t> queueFamilies(3, UINT32_MAX);
     bool foundGrFamily{false};
     bool foundPrFamily{false};
     bool foundCoFamily{false};
@@ -236,7 +234,7 @@ void Device::initLogDevice(bool useVL, std::vector<const char *> deviceExt, std:
     {
         if (queueFamiliesList[i].queueFlags & VK_QUEUE_GRAPHICS_BIT && !foundGrFamily)
         {
-            queueFamilies.insert(i);
+            queueFamilies[0] = i;
             foundGrFamily = true;
         }
 
@@ -246,17 +244,19 @@ void Device::initLogDevice(bool useVL, std::vector<const char *> deviceExt, std:
             vkGetPhysicalDeviceSurfaceSupportKHR(phyDevice, i, surface, &presentSupport);
             if (presentSupport)
             {
-                queueFamilies.insert(i);
+                queueFamilies[1] = i;
                 foundPrFamily = true;
             }
         }
 
         if (queueFamiliesList[i].queueFlags & VK_QUEUE_COMPUTE_BIT && !foundCoFamily)
         {
-            queueFamilies.insert(i);
+            queueFamilies[2] = i;
             foundCoFamily = true;
         }
     }
+    std::sort(queueFamilies.begin(), queueFamilies.end());
+    queueFamilies.erase(std::unique(queueFamilies.begin(), queueFamilies.end()), queueFamilies.end());
 
     VkDeviceQueueCreateInfo queueCreateInfo{
         .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -281,6 +281,23 @@ void Device::initLogDevice(bool useVL, std::vector<const char *> deviceExt, std:
         .pEnabledFeatures = nullptr,
     };
     vkCheck(vkCreateDevice(phyDevice, &logDeviceInfo, nullptr, &logDevice), "failed to initialize logic device");
+
+    // retrieve queue handle
+    vkGetDeviceQueue(logDevice, queueFamilies[0], 0, &queues.graphics);
+    queues.present = queues.graphics;
+    queues.compute = queues.graphics;
+    if (queueFamilies[1] != queueFamilies[0])
+    {
+        vkGetDeviceQueue(logDevice, queueFamilies[1], 0, &queues.present);
+    }
+    if (queueFamilies[2] != queueFamilies[0] && queueFamilies[2] != queueFamilies[1])
+    {
+        vkGetDeviceQueue(logDevice, queueFamilies[2], 0, &queues.compute);
+    }
+    else if (queueFamilies[2] != queueFamilies[0])
+    {
+        queues.compute = queues.present;
+    }
 }
 
 Device::~Device()

@@ -48,9 +48,26 @@ class GLFW
 int main()
 {
     GLFW glfw(800, 800);
-    Cthovk::Application app(true, {"VK_LAYER_KHRONOS_validation"}, {VK_KHR_SWAPCHAIN_EXTENSION_NAME},
-                            glfw.getExtensions(), glfw.initSurface, glfw.getFrameBufferSize, "shaders/shader.vert.spv",
-                            "shaders/shader.frag.spv", VK_SAMPLE_COUNT_1_BIT);
+    Cthovk::DeviceInfo deviceInfo{
+        .enableVL = true,
+        .vl = {"VK_LAYER_KHRONOS_validation"},
+        .deviceExt = {VK_KHR_SWAPCHAIN_EXTENSION_NAME},
+        .windowExt = glfw.getExtensions(),
+        .initSurface = glfw.initSurface,
+    };
+    Cthovk::GraphicsInfo graphicsInfo{
+        .getFrameBufferSize = glfw.getFrameBufferSize,
+        .vertShaderLocation = "shaders/shader.vert.spv",
+        .fragShaderLocation = "shaders/shader.frag.spv",
+        .multiSampleCount = VK_SAMPLE_COUNT_1_BIT,
+        .framesInFlight = 1,
+        .verticesDatas = {{{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}},
+                          {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}},
+                          {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}},
+                          {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}}},
+        .indicesDatas = {0, 1, 2, 2, 3, 0},
+    };
+    Cthovk::Application app(deviceInfo, graphicsInfo);
 
     try
     {
