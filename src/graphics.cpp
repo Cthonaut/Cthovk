@@ -1,5 +1,4 @@
 #include "../headers/graphics.h"
-#include <vulkan/vulkan_core.h>
 
 namespace Cthovk
 {
@@ -16,18 +15,18 @@ Graphics::Graphics(VkDevice logDevice, VkPhysicalDevice phyDevice, VkSurfaceKHR 
                    VkQueue graphicsQueue, GraphicsInfo inf)
     : logDevice(logDevice), sc(logDevice, phyDevice, surface, inf.getFrameBufferSize),
       command(logDevice, phyDevice, inf.framesInFlight),
-      vertex(BufferObj::optimizeForGPU(logDevice, phyDevice, sizeof(inf.verticesDatas[0]) * inf.verticesDatas.size(),
-                                       inf.verticesDatas.data(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, command,
-                                       graphicsQueue)),
-      index(BufferObj::optimizeForGPU(logDevice, phyDevice, sizeof(inf.indicesDatas[0]) * inf.indicesDatas.size(),
-                                      inf.indicesDatas.data(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, command,
-                                      graphicsQueue)),
+      vertex(BufferObj::optimizeForGPU(logDevice, phyDevice, sizeof(inf.verticesData[0]) * inf.verticesData.size(),
+                                       inf.verticesData.data(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, command,
+                                       graphicsQueue, static_cast<uint32_t>(inf.verticesData.size()))),
+      index(BufferObj::optimizeForGPU(logDevice, phyDevice, sizeof(inf.indicesData[0]) * inf.indicesData.size(),
+                                      inf.indicesData.data(), VK_BUFFER_USAGE_INDEX_BUFFER_BIT, command, graphicsQueue,
+                                      static_cast<uint32_t>(inf.indicesData.size()))),
       pool(logDevice, inf.framesInFlight),
       depth(logDevice, phyDevice, sc.extent, inf.multiSampleCount, depthFormat,
             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT),
       color(logDevice, phyDevice, sc.extent, inf.multiSampleCount, sc.format,
             VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_IMAGE_ASPECT_COLOR_BIT),
-      sync(logDevice, inf.framesInFlight)
+      sync(logDevice, inf.framesInFlight), depthFormat(depthFormat)
 {
     ShaderObj vertexShader(logDevice, inf.vertShaderLocation, VK_SHADER_STAGE_VERTEX_BIT);
     ShaderObj fragmentShader(logDevice, inf.fragShaderLocation, VK_SHADER_STAGE_FRAGMENT_BIT);
@@ -57,7 +56,8 @@ void Graphics::initRenderPass(VkDevice logDevice, VkSampleCountFlagBits multiSam
         .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
         .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .finalLayout = multiSampleCount != VK_SAMPLE_COUNT_1_BIT ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                                                                 : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
     };
     VkAttachmentReference colorRef{
         .attachment = 0,
@@ -149,7 +149,7 @@ void Graphics::initDescriptorSets(VkDevice logDevice, uint32_t fIF)
             .dstBinding = 0,
             .dstArrayElement = 0,
             .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
             .pBufferInfo = &bufferInfo,
         };
         vkUpdateDescriptorSets(logDevice, 1, &descriptorWrite, 0, nullptr);
@@ -179,8 +179,100 @@ void Graphics::initFrameBuffers(VkDevice logDevice, VkSampleCountFlagBits multiS
     }
 }
 
+void Graphics::reinitSwapChain(VkPhysicalDevice phyDevice, VkSurfaceKHR surface, GraphicsInfo inf)
+{
+    vkDeviceWaitIdle(logDevice);
+
+    for (uint8_t i{0}; i < frameBuffers.size(); i++)
+    {
+        vkDestroyFramebuffer(logDevice, frameBuffers[i], nullptr);
+    }
+    sc = SwapChainObj(logDevice, phyDevice, surface, inf.getFrameBufferSize);
+    depth = ImageObj(logDevice, phyDevice, sc.extent, inf.multiSampleCount, depthFormat,
+                     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+    color = ImageObj(logDevice, phyDevice, sc.extent, inf.multiSampleCount, sc.format,
+                     VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                     VK_IMAGE_ASPECT_COLOR_BIT);
+    initFrameBuffers(logDevice, inf.multiSampleCount);
+}
+
+void Graphics::draw(VkPhysicalDevice phyDevice, VkSurfaceKHR surface, GraphicsInfo inf, VkQueue graphicsQueue,
+                    VkQueue presentQueue)
+{
+    vkWaitForFences(logDevice, 1, &sync.processFences[currentFrame], VK_TRUE, UINT64_MAX);
+
+    uint32_t imageIndex;
+    VkResult swapChainImageState = vkAcquireNextImageKHR(
+        logDevice, sc.SwapChain, UINT64_MAX, sync.imageSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+    if (swapChainImageState == VK_ERROR_OUT_OF_DATE_KHR)
+    {
+        reinitSwapChain(phyDevice, surface, inf);
+        return;
+    }
+    else if (swapChainImageState != VK_SUCCESS && swapChainImageState != VK_SUBOPTIMAL_KHR)
+    {
+        throw std::runtime_error("failed to get next SwapChain image");
+    }
+
+    // update ubo
+    static auto startTime = std::chrono::high_resolution_clock::now();
+
+    auto currentTime = std::chrono::high_resolution_clock::now();
+    float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+    UniformBufferObject ubo{};
+    ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    ubo.proj = glm::perspective(glm::radians(45.0f), sc.extent.width / (float)sc.extent.height, 0.01f, 100.0f);
+    ubo.proj[1][1] *= -1;
+    memcpy(uniformMemoryPointers[currentFrame], &ubo, sizeof(ubo));
+
+    vkResetFences(logDevice, 1, &sync.processFences[currentFrame]);
+
+    vkResetCommandBuffer(command.Buffers[currentFrame], 0);
+    command.record(pipeline, descriptorSets[currentFrame], vertex, index, renderPass, frameBuffers[imageIndex], sc,
+                   currentFrame);
+
+    VkSubmitInfo submitInfo{
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = &sync.imageSemaphores[currentFrame],
+        .pWaitDstStageMask = new VkPipelineStageFlags(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT),
+        .commandBufferCount = 1,
+        .pCommandBuffers = &command.Buffers[currentFrame],
+        .signalSemaphoreCount = 1,
+        .pSignalSemaphores = &sync.renderSemaphores[currentFrame],
+    };
+    vkCheck(vkQueueSubmit(graphicsQueue, 1, &submitInfo, sync.processFences[currentFrame]), "failed to submit queue");
+
+    VkPresentInfoKHR presentInfo{
+        .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = &sync.renderSemaphores[currentFrame],
+        .swapchainCount = 1,
+        .pSwapchains = &sc.SwapChain,
+        .pImageIndices = &imageIndex,
+    };
+    swapChainImageState = vkQueuePresentKHR(presentQueue, &presentInfo);
+    if (swapChainImageState == VK_ERROR_OUT_OF_DATE_KHR || swapChainImageState == VK_SUBOPTIMAL_KHR)
+    {
+        reinitSC = true;
+    }
+    else if (swapChainImageState != VK_SUCCESS)
+    {
+        throw std::runtime_error("failed to present SwapChain image");
+    }
+    if (reinitSC)
+    {
+        reinitSC = false;
+        reinitSwapChain(phyDevice, surface, inf);
+    }
+
+    currentFrame = (currentFrame + 1) % inf.framesInFlight;
+}
+
 Graphics::~Graphics()
 {
+    vkDeviceWaitIdle(logDevice);
     vkDestroyRenderPass(logDevice, renderPass, nullptr);
     for (uint8_t i{0}; i < pUniforms.size(); i++)
     {
@@ -350,7 +442,7 @@ PipelineObj::~PipelineObj()
 DescriptorPoolObj::DescriptorPoolObj(VkDevice logDevice, uint32_t fIF) : logDevice(logDevice)
 {
     VkDescriptorPoolSize poolSize{
-        .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+        .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
         .descriptorCount = fIF,
     };
     VkDescriptorPoolCreateInfo poolInfo{
@@ -363,7 +455,7 @@ DescriptorPoolObj::DescriptorPoolObj(VkDevice logDevice, uint32_t fIF) : logDevi
 
     VkDescriptorSetLayoutBinding uboLB{
         .binding = 0,
-        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
         .descriptorCount = 1,
         .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
         .pImmutableSamplers = nullptr,
@@ -457,8 +549,8 @@ ImageObj::~ImageObj()
 }
 
 BufferObj::BufferObj(VkDevice logDevice, VkPhysicalDevice phyDevice, VkDeviceSize size, VkBufferUsageFlags usage,
-                     VkMemoryPropertyFlags properties)
-    : logDevice(logDevice)
+                     VkMemoryPropertyFlags properties, uint32_t count)
+    : Count(count), logDevice(logDevice)
 {
     VkBufferCreateInfo bInfo{
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -500,7 +592,7 @@ BufferObj::BufferObj(VkDevice logDevice, VkPhysicalDevice phyDevice, VkDeviceSiz
 
 BufferObj BufferObj::optimizeForGPU(VkDevice logDevice, VkPhysicalDevice phyDevice, VkDeviceSize size,
                                     const void *inputData, VkBufferUsageFlagBits usageBit, CommandObj &command,
-                                    VkQueue graphicsQueue)
+                                    VkQueue graphicsQueue, uint32_t count)
 {
     // create buffer for storing
     BufferObj staging(logDevice, phyDevice, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -512,7 +604,7 @@ BufferObj BufferObj::optimizeForGPU(VkDevice logDevice, VkPhysicalDevice phyDevi
     vkUnmapMemory(logDevice, staging.memory);
 
     BufferObj result(logDevice, phyDevice, size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usageBit,
-                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, count);
 
     // copy buffers
     VkCommandBufferAllocateInfo tempCBInfo{
@@ -592,8 +684,53 @@ CommandObj::CommandObj(VkDevice logDevice, VkPhysicalDevice phyDevice, uint32_t 
     vkCheck(vkAllocateCommandBuffers(logDevice, &cbInfo, Buffers.data()), "failed to create command buffers");
 }
 
-void CommandObj::record()
+void CommandObj::record(PipelineObj *pipeline, VkDescriptorSet descriptorSet, BufferObj &vertexBuf, BufferObj &indexBuf,
+                        VkRenderPass renderPass, VkFramebuffer frameBuffer, SwapChainObj &sc, uint32_t currentcb)
 {
+    vkCheck(vkBeginCommandBuffer(Buffers[currentcb],
+                                 new VkCommandBufferBeginInfo({.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO})),
+            "failed to record buffer");
+
+    VkClearValue clearValues[2];
+    clearValues[0] = clearValue;
+    clearValues[1].depthStencil = {1.0f, 0};
+    VkRenderPassBeginInfo renderPassInfo{
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+        .renderPass = renderPass,
+        .framebuffer = frameBuffer,
+        .renderArea =
+            {
+                .offset = {0, 0},
+                .extent = sc.extent,
+            },
+        .clearValueCount = 2,
+        .pClearValues = clearValues,
+    };
+    VkViewport viewport{
+        .x = 0.0f,
+        .y = 0.0f,
+        .width = static_cast<float>(sc.extent.width),
+        .height = static_cast<float>(sc.extent.height),
+        .minDepth = 0.0f,
+        .maxDepth = 1.0,
+    };
+    VkRect2D scissor{
+        .offset = {0, 0},
+        .extent = sc.extent,
+    };
+    vkCmdBeginRenderPass(Buffers[currentcb], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    vkCmdBindPipeline(Buffers[currentcb], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pl);
+    vkCmdSetViewport(Buffers[currentcb], 0, 1, &viewport);
+    vkCmdSetScissor(Buffers[currentcb], 0, 1, &scissor);
+    vkCmdBindVertexBuffers(Buffers[currentcb], 0, 1, &vertexBuf.buffer, new VkDeviceSize(0));
+    vkCmdBindDescriptorSets(Buffers[currentcb], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->layout, 0, 1, &descriptorSet,
+                            0, nullptr);
+    vkCmdBindIndexBuffer(Buffers[currentcb], indexBuf.buffer, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdDrawIndexed(Buffers[currentcb], indexBuf.Count, 1, 0, 0, 0);
+
+    vkCmdEndRenderPass(Buffers[currentcb]);
+    vkCheck(vkEndCommandBuffer(Buffers[currentcb]), "failed to record buffer");
 }
 
 CommandObj::~CommandObj()

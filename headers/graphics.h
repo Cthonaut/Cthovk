@@ -1,13 +1,17 @@
 #pragma once
 
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <functional>
 #include <set>
 #include <vector>
 
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_core.h>
 
@@ -41,6 +45,10 @@ struct SwapChainObj
     ~SwapChainObj();
 };
 
+// Forward Declaration for CommandObj
+struct PipelineObj;
+struct BufferObj;
+
 struct CommandObj
 {
     VkCommandPool Pool;
@@ -51,22 +59,24 @@ struct CommandObj
     CommandObj(VkDevice logDevice, VkPhysicalDevice phyDevice, uint32_t framesInFlight);
     ~CommandObj();
 
-    void record();
+    void record(PipelineObj *pipeline, VkDescriptorSet descriptorSet, BufferObj &vertexBuf, BufferObj &indexBuf,
+                VkRenderPass renderPass, VkFramebuffer frameBuffer, SwapChainObj &sc, uint32_t currentcb);
 };
 
 struct BufferObj
 {
     VkBuffer buffer;
     VkDeviceMemory memory;
+    uint32_t Count; // optinal really
     VkDevice logDevice;
 
     BufferObj(VkDevice logDevice, VkPhysicalDevice phyDevice, VkDeviceSize size, VkBufferUsageFlags usage,
-              VkMemoryPropertyFlags properties);
+              VkMemoryPropertyFlags properties, uint32_t count = 0);
     ~BufferObj();
 
     static BufferObj optimizeForGPU(VkDevice logDevice, VkPhysicalDevice phyDevice, VkDeviceSize size,
                                     const void *inputData, VkBufferUsageFlagBits usageBit, CommandObj &command,
-                                    VkQueue graphicsQueue);
+                                    VkQueue graphicsQueue, uint32_t count = 0);
 };
 
 struct ImageObj
@@ -164,8 +174,8 @@ struct GraphicsInfo
     std::string fragShaderLocation;
     VkSampleCountFlagBits multiSampleCount;
     uint32_t framesInFlight;
-    std::vector<Vertex> verticesDatas;
-    std::vector<uint32_t> indicesDatas;
+    std::vector<Vertex> verticesData;
+    std::vector<uint32_t> indicesData;
 };
 
 class Graphics
@@ -174,6 +184,9 @@ class Graphics
     Graphics(VkDevice logDevice, VkPhysicalDevice phyDevice, VkSurfaceKHR surface, VkFormat depthFormat,
              VkQueue graphicsQueue, GraphicsInfo inf);
     ~Graphics();
+
+    void draw(VkPhysicalDevice phyDevice, VkSurfaceKHR surface, GraphicsInfo inf, VkQueue graphicsQueue,
+              VkQueue presentQueue);
 
   private:
     VkDevice logDevice;
@@ -192,10 +205,14 @@ class Graphics
     std::vector<VkDescriptorSet> descriptorSets;
     std::vector<VkFramebuffer> frameBuffers;
     SyncObj sync;
+    uint32_t currentFrame;
+    bool reinitSC{false};
+    VkFormat depthFormat;
 
     void initRenderPass(VkDevice logDevice, VkSampleCountFlagBits multiSampleCount, VkFormat depthFormat);
     void initDescriptorSets(VkDevice logDevice, uint32_t fIF);
     void initFrameBuffers(VkDevice logDevice, VkSampleCountFlagBits multiSampleCount);
+    void reinitSwapChain(VkPhysicalDevice phyDevice, VkSurfaceKHR surface, GraphicsInfo inf);
 };
 
 } // namespace Cthovk

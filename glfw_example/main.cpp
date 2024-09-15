@@ -43,6 +43,13 @@ class GLFW
         width = static_cast<uint32_t>(widthS);
         height = static_cast<uint32_t>(heightS);
     };
+
+    std::function<bool()> terminateCheck = [&]() {
+        if (glfwWindowShouldClose(window))
+            return true;
+        glfwPollEvents();
+        return false;
+    };
 };
 
 int main()
@@ -59,15 +66,15 @@ int main()
         .getFrameBufferSize = glfw.getFrameBufferSize,
         .vertShaderLocation = "shaders/shader.vert.spv",
         .fragShaderLocation = "shaders/shader.frag.spv",
-        .multiSampleCount = VK_SAMPLE_COUNT_1_BIT,
-        .framesInFlight = 1,
-        .verticesDatas = {{{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}},
-                          {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}},
-                          {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}},
-                          {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}}},
-        .indicesDatas = {0, 1, 2, 2, 3, 0},
+        .multiSampleCount = VK_SAMPLE_COUNT_16_BIT,
+        .framesInFlight = 2,
+        .verticesData = {{{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}},
+                         {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}},
+                         {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}},
+                         {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}}},
+        .indicesData = {0, 1, 2, 2, 3, 0},
     };
-    Cthovk::Application app(deviceInfo, graphicsInfo);
+    Cthovk::Application app(deviceInfo, graphicsInfo, glfw.terminateCheck);
 
     try
     {
