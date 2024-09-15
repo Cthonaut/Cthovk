@@ -105,6 +105,24 @@ struct PipelineObj
     ~PipelineObj();
 };
 
+struct SyncObj
+{
+    std::vector<VkSemaphore> imageSemaphores;
+    std::vector<VkSemaphore> renderSemaphores;
+    std::vector<VkFence> processFences;
+    VkDevice logDevice;
+
+    SyncObj(VkDevice logDevice, uint32_t fIF);
+    ~SyncObj();
+
+    void resize(uint32_t newSize)
+    {
+        imageSemaphores.resize(newSize);
+        renderSemaphores.resize(newSize);
+        processFences.resize(newSize);
+    }
+};
+
 struct Vertex
 {
     glm::vec3 pos;
@@ -173,6 +191,7 @@ class Graphics
     PipelineObj *pipeline;
     std::vector<VkDescriptorSet> descriptorSets;
     std::vector<VkFramebuffer> frameBuffers;
+    SyncObj sync;
 
     void initRenderPass(VkDevice logDevice, VkSampleCountFlagBits multiSampleCount, VkFormat depthFormat);
     void initDescriptorSets(VkDevice logDevice, uint32_t fIF);

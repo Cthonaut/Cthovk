@@ -1,4 +1,5 @@
 #include "../headers/graphics.h"
+#include <vulkan/vulkan_core.h>
 
 namespace Cthovk
 {
@@ -25,7 +26,8 @@ Graphics::Graphics(VkDevice logDevice, VkPhysicalDevice phyDevice, VkSurfaceKHR 
       depth(logDevice, phyDevice, sc.extent, inf.multiSampleCount, depthFormat,
             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT),
       color(logDevice, phyDevice, sc.extent, inf.multiSampleCount, sc.format,
-            VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_IMAGE_ASPECT_COLOR_BIT)
+            VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_IMAGE_ASPECT_COLOR_BIT),
+      sync(logDevice, inf.framesInFlight)
 {
     ShaderObj vertexShader(logDevice, inf.vertShaderLocation, VK_SHADER_STAGE_VERTEX_BIT);
     ShaderObj fragmentShader(logDevice, inf.fragShaderLocation, VK_SHADER_STAGE_FRAGMENT_BIT);
@@ -188,6 +190,36 @@ Graphics::~Graphics()
     for (uint8_t i{0}; i < frameBuffers.size(); i++)
     {
         vkDestroyFramebuffer(logDevice, frameBuffers[i], nullptr);
+    }
+}
+
+SyncObj::SyncObj(VkDevice logDevice, uint32_t fIF) : logDevice(logDevice)
+{
+    resize(fIF);
+    VkSemaphoreCreateInfo semaphoreInfo{
+        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+    };
+    VkFenceCreateInfo fenceInfo{
+        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+        .flags = VK_FENCE_CREATE_SIGNALED_BIT,
+    };
+    for (int8_t i{0}; i < fIF; i++)
+    {
+        vkCheck(vkCreateSemaphore(logDevice, &semaphoreInfo, nullptr, &imageSemaphores[i]),
+                "failed to create semaphore");
+        vkCheck(vkCreateSemaphore(logDevice, &semaphoreInfo, nullptr, &renderSemaphores[i]),
+                "failed to create semaphore");
+        vkCheck(vkCreateFence(logDevice, &fenceInfo, nullptr, &processFences[i]), "failed to create fence");
+    }
+}
+
+SyncObj::~SyncObj()
+{
+    for (int8_t i{0}; i < imageSemaphores.size(); i++)
+    {
+        vkDestroySemaphore(logDevice, imageSemaphores[i], nullptr);
+        vkDestroySemaphore(logDevice, renderSemaphores[i], nullptr);
+        vkDestroyFence(logDevice, processFences[i], nullptr);
     }
 }
 
