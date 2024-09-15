@@ -81,14 +81,62 @@ struct ImageObj
     ~ImageObj();
 };
 
+struct DescriptorPoolObj
+{
+    VkDescriptorPool descriptorPool;
+    VkDescriptorSetLayout descriptorlayout;
+    VkDevice logDevice;
+
+    DescriptorPoolObj(VkDevice logDevice, uint32_t fIF);
+    ~DescriptorPoolObj();
+};
+
+struct PipelineObj
+{
+    VkPipelineLayout layout;
+    VkPipeline pl;
+    VkPrimitiveTopology topology;
+    VkDevice logDevice;
+
+    PipelineObj(VkDevice logDevice, VkRenderPass renderPass, DescriptorPoolObj &pool, SwapChainObj &sc,
+                std::vector<VkPipelineShaderStageCreateInfo> shaderStageInfos, VkSampleCountFlagBits multi,
+                VkPrimitiveTopology topology);
+
+    ~PipelineObj();
+};
+
 struct Vertex
 {
     glm::vec3 pos;
     glm::vec3 color;
+
+    static std::vector<VkVertexInputAttributeDescription> getAttributes()
+    {
+        std::vector<VkVertexInputAttributeDescription> vertexInputAttributes(2);
+        VkVertexInputAttributeDescription temp{
+            .binding = 0,
+            .format = VK_FORMAT_R32G32B32_SFLOAT,
+        };
+        vertexInputAttributes[0] = temp;
+        vertexInputAttributes[0].location = 0;
+        vertexInputAttributes[0].offset = offsetof(Vertex, pos);
+        vertexInputAttributes[1] = temp;
+        vertexInputAttributes[1].location = 1;
+        vertexInputAttributes[1].offset = offsetof(Vertex, color);
+        return vertexInputAttributes;
+    };
+
+    bool operator==(const Vertex &other) const
+    {
+        return pos == other.pos && color == other.color;
+    }
 };
 
 struct UniformBufferObject
 {
+    glm::mat4 model;
+    glm::mat4 view;
+    glm::mat4 proj;
 };
 
 struct GraphicsInfo
@@ -122,6 +170,8 @@ class Graphics
     std::vector<void *> uniformMemoryPointers;
     ImageObj depth;
     ImageObj color;
+    DescriptorPoolObj pool;
+    PipelineObj *pipeline;
 
     void initRenderPass(VkDevice logDevice, SwapChainObj &sc, VkSampleCountFlagBits multiSampleCount,
                         VkFormat depthFormat);

@@ -22,6 +22,7 @@ Graphics::Graphics(VkDevice logDevice, VkPhysicalDevice phyDevice, VkSurfaceKHR 
       index(BufferObj::optimizeForGPU(logDevice, phyDevice, sizeof(inf.indicesDatas[0]) * inf.indicesDatas.size(),
                                       inf.indicesDatas.data(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, command,
                                       graphicsQueue)),
+      pool(logDevice, inf.framesInFlight),
       depth(logDevice, phyDevice, sc.extent, inf.multiSampleCount, depthFormat,
             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT),
       color(logDevice, phyDevice, sc.extent, inf.multiSampleCount, sc.format,
@@ -39,6 +40,8 @@ Graphics::Graphics(VkDevice logDevice, VkPhysicalDevice phyDevice, VkSurfaceKHR 
                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         vkMapMemory(logDevice, pUniforms[i]->memory, 0, sizeof(UniformBufferObject), 0, &uniformMemoryPointers[i]);
     }
+    pipeline = new PipelineObj(logDevice, renderPass, pool, sc, {vertexShader.stageInfo, fragmentShader.stageInfo},
+                               inf.multiSampleCount, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
 }
 
 void Graphics::initRenderPass(VkDevice logDevice, SwapChainObj &sc, VkSampleCountFlagBits multiSampleCount,
@@ -127,6 +130,167 @@ Graphics::~Graphics()
     {
         delete pUniforms[i];
     }
+    delete pipeline;
+}
+
+PipelineObj::PipelineObj(VkDevice logDevice, VkRenderPass renderPass, DescriptorPoolObj &pool, SwapChainObj &sc,
+                         std::vector<VkPipelineShaderStageCreateInfo> shaderStageInfos, VkSampleCountFlagBits multi,
+                         VkPrimitiveTopology topology)
+    : logDevice(logDevice), topology(topology)
+{
+    VkVertexInputBindingDescription vertexBindingDescription{
+        .binding = 0,
+        .stride = sizeof(Vertex),
+        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+    };
+
+    std::vector<VkVertexInputAttributeDescription> vertexAttributes = Vertex::getAttributes();
+
+    VkPipelineVertexInputStateCreateInfo vertexInputInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &vertexBindingDescription,
+        .vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexAttributes.size()),
+        .pVertexAttributeDescriptions = vertexAttributes.data(),
+    };
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .topology = topology,
+        .primitiveRestartEnable = VK_FALSE,
+    };
+    VkViewport viewport{
+        // just take the whole window
+        .x = 0.0f,        .y = 0.0f,        .width = (float)sc.extent.width, .height = (float)sc.extent.height,
+        .minDepth = 0.0f, .maxDepth = 1.0f,
+    };
+    VkRect2D scissor{
+        // don't cut anything
+        .offset = {0, 0},
+        .extent = sc.extent,
+    };
+    std::vector<VkDynamicState> dynamicStates = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamicState{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+        .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
+        .pDynamicStates = dynamicStates.data(),
+    };
+
+    VkPipelineViewportStateCreateInfo viewportState{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .viewportCount = 1,
+        .pViewports = &viewport,
+        .scissorCount = 1,
+        .pScissors = &scissor,
+    };
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .depthClampEnable = VK_FALSE,
+        .rasterizerDiscardEnable = VK_FALSE,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .cullMode = VK_CULL_MODE_BACK_BIT,
+        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+        .depthBiasEnable = VK_FALSE,
+        .lineWidth = 1.0f,
+    };
+
+    VkPipelineMultisampleStateCreateInfo multisampling{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .rasterizationSamples = multi,
+        .sampleShadingEnable = VK_FALSE,
+    };
+
+    VkPipelineDepthStencilStateCreateInfo depthStencil{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable = VK_TRUE,
+        .depthWriteEnable = VK_TRUE,
+        .depthCompareOp = VK_COMPARE_OP_LESS,
+        .depthBoundsTestEnable = VK_FALSE,
+        .stencilTestEnable = VK_FALSE,
+    };
+
+    VkPipelineColorBlendAttachmentState colorBlendAttachment{
+        .blendEnable = VK_FALSE,
+        .colorWriteMask =
+            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+    };
+
+    VkPipelineColorBlendStateCreateInfo colorBlending{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .logicOpEnable = VK_FALSE,
+        .attachmentCount = 1,
+        .pAttachments = &colorBlendAttachment,
+    };
+
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &pool.descriptorlayout,
+    };
+    vkCheck(vkCreatePipelineLayout(logDevice, &pipelineLayoutInfo, nullptr, &layout),
+            "failed to create pipeline layout");
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount = static_cast<uint32_t>(shaderStageInfos.size()),
+        .pStages = shaderStageInfos.data(),
+        .pVertexInputState = &vertexInputInfo,
+        .pInputAssemblyState = &inputAssembly,
+        .pViewportState = &viewportState,
+        .pRasterizationState = &rasterizer,
+        .pMultisampleState = &multisampling,
+        .pDepthStencilState = &depthStencil,
+        .pColorBlendState = &colorBlending,
+        .pDynamicState = &dynamicState,
+        .layout = layout,
+        .renderPass = renderPass,
+        .subpass = 0,
+    };
+    vkCheck(vkCreateGraphicsPipelines(logDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pl),
+            "failed to create pipeline");
+}
+
+PipelineObj::~PipelineObj()
+{
+    vkDestroyPipeline(logDevice, pl, nullptr);
+    vkDestroyPipelineLayout(logDevice, layout, nullptr);
+}
+
+DescriptorPoolObj::DescriptorPoolObj(VkDevice logDevice, uint32_t fIF) : logDevice(logDevice)
+{
+    VkDescriptorPoolSize poolSize{
+        .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+        .descriptorCount = fIF,
+    };
+    VkDescriptorPoolCreateInfo poolInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .maxSets = fIF,
+        .poolSizeCount = 1,
+        .pPoolSizes = &poolSize,
+    };
+    vkCheck(vkCreateDescriptorPool(logDevice, &poolInfo, nullptr, &descriptorPool), "failed to create descriptor pool");
+
+    VkDescriptorSetLayoutBinding uboLB{
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        .pImmutableSamplers = nullptr,
+    };
+    VkDescriptorSetLayoutCreateInfo dlInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 1,
+        .pBindings = &uboLB,
+    };
+    vkCheck(vkCreateDescriptorSetLayout(logDevice, &dlInfo, nullptr, &descriptorlayout),
+            "failed to create descriptor set layout");
+}
+
+DescriptorPoolObj::~DescriptorPoolObj()
+{
+    vkDestroyDescriptorPool(logDevice, descriptorPool, nullptr);
+    vkDestroyDescriptorSetLayout(logDevice, descriptorlayout, nullptr);
 }
 
 ImageObj::ImageObj(VkDevice logDevice, VkPhysicalDevice phyDevice, VkExtent2D extent, VkSampleCountFlagBits samples,
