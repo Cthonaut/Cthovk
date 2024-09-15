@@ -1,5 +1,4 @@
 #include "../headers/graphics.h"
-#include <strings.h>
 
 namespace Cthovk
 {
@@ -30,7 +29,7 @@ Graphics::Graphics(VkDevice logDevice, VkPhysicalDevice phyDevice, VkSurfaceKHR 
 {
     ShaderObj vertexShader(logDevice, inf.vertShaderLocation, VK_SHADER_STAGE_VERTEX_BIT);
     ShaderObj fragmentShader(logDevice, inf.fragShaderLocation, VK_SHADER_STAGE_FRAGMENT_BIT);
-    initRenderPass(logDevice, sc, inf.multiSampleCount, depthFormat);
+    initRenderPass(logDevice, inf.multiSampleCount, depthFormat);
     pUniforms.resize(inf.framesInFlight);
     uniformMemoryPointers.resize(inf.framesInFlight);
     for (uint8_t i{0}; i < inf.framesInFlight; i++)
@@ -42,10 +41,11 @@ Graphics::Graphics(VkDevice logDevice, VkPhysicalDevice phyDevice, VkSurfaceKHR 
     }
     pipeline = new PipelineObj(logDevice, renderPass, pool, sc, {vertexShader.stageInfo, fragmentShader.stageInfo},
                                inf.multiSampleCount, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    initDescriptorSets(logDevice, inf.framesInFlight);
+    initFrameBuffers(logDevice, inf.multiSampleCount);
 }
 
-void Graphics::initRenderPass(VkDevice logDevice, SwapChainObj &sc, VkSampleCountFlagBits multiSampleCount,
-                              VkFormat depthFormat)
+void Graphics::initRenderPass(VkDevice logDevice, VkSampleCountFlagBits multiSampleCount, VkFormat depthFormat)
 {
     VkAttachmentDescription color{
         .format = sc.format,
@@ -123,6 +123,60 @@ void Graphics::initRenderPass(VkDevice logDevice, SwapChainObj &sc, VkSampleCoun
     vkCheck(vkCreateRenderPass(logDevice, &renderPassInfo, nullptr, &renderPass), "failed to create RenderPass");
 }
 
+void Graphics::initDescriptorSets(VkDevice logDevice, uint32_t fIF)
+{
+    std::vector<VkDescriptorSetLayout> layouts(fIF, pool.descriptorlayout);
+    VkDescriptorSetAllocateInfo dInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = pool.descriptorPool,
+        .descriptorSetCount = fIF,
+        .pSetLayouts = layouts.data(),
+    };
+    descriptorSets.resize(fIF);
+    vkCheck(vkAllocateDescriptorSets(logDevice, &dInfo, descriptorSets.data()), "failed to allocate descriptor sets");
+    for (uint8_t i{0}; i < fIF; i++)
+    {
+        VkDescriptorBufferInfo bufferInfo{
+            .buffer = pUniforms[i]->buffer,
+            .offset = 0,
+            .range = sizeof(UniformBufferObject),
+        };
+        VkWriteDescriptorSet descriptorWrite{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = descriptorSets[i],
+            .dstBinding = 0,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+            .pBufferInfo = &bufferInfo,
+        };
+        vkUpdateDescriptorSets(logDevice, 1, &descriptorWrite, 0, nullptr);
+    }
+};
+
+void Graphics::initFrameBuffers(VkDevice logDevice, VkSampleCountFlagBits multiSampleCount)
+{
+    uint32_t framebufferCount = sc.imageViews.size();
+    frameBuffers.resize(framebufferCount);
+    for (uint8_t i{0}; i < framebufferCount; i++)
+    {
+        std::vector<VkImageView> attachments = {color.view, depth.view, sc.imageViews[i]};
+        if (multiSampleCount == VK_SAMPLE_COUNT_1_BIT)
+            attachments = {sc.imageViews[i], depth.view};
+        VkFramebufferCreateInfo framebufferInfo{
+            .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+            .renderPass = renderPass,
+            .attachmentCount = static_cast<uint32_t>(attachments.size()),
+            .pAttachments = attachments.data(),
+            .width = sc.extent.width,
+            .height = sc.extent.height,
+            .layers = 1,
+        };
+        vkCheck(vkCreateFramebuffer(logDevice, &framebufferInfo, nullptr, &frameBuffers[i]),
+                "failed to create frame buffers");
+    }
+}
+
 Graphics::~Graphics()
 {
     vkDestroyRenderPass(logDevice, renderPass, nullptr);
@@ -131,6 +185,10 @@ Graphics::~Graphics()
         delete pUniforms[i];
     }
     delete pipeline;
+    for (uint8_t i{0}; i < frameBuffers.size(); i++)
+    {
+        vkDestroyFramebuffer(logDevice, frameBuffers[i], nullptr);
+    }
 }
 
 PipelineObj::PipelineObj(VkDevice logDevice, VkRenderPass renderPass, DescriptorPoolObj &pool, SwapChainObj &sc,

@@ -161,7 +161,6 @@ class Graphics
     VkDevice logDevice;
     SwapChainObj sc;
     std::vector<ShaderObj> shaders;
-    VkFormat depthformat;
     VkRenderPass renderPass;
     CommandObj command;
     BufferObj vertex;
@@ -172,9 +171,12 @@ class Graphics
     ImageObj color;
     DescriptorPoolObj pool;
     PipelineObj *pipeline;
+    std::vector<VkDescriptorSet> descriptorSets;
+    std::vector<VkFramebuffer> frameBuffers;
 
-    void initRenderPass(VkDevice logDevice, SwapChainObj &sc, VkSampleCountFlagBits multiSampleCount,
-                        VkFormat depthFormat);
+    void initRenderPass(VkDevice logDevice, VkSampleCountFlagBits multiSampleCount, VkFormat depthFormat);
+    void initDescriptorSets(VkDevice logDevice, uint32_t fIF);
+    void initFrameBuffers(VkDevice logDevice, VkSampleCountFlagBits multiSampleCount);
 };
 
 } // namespace Cthovk
