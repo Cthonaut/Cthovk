@@ -14,35 +14,49 @@ static void vkCheck(bool result, const char *error)
 Graphics::Graphics(VkDevice logDevice, VkPhysicalDevice phyDevice, VkSurfaceKHR surface, VkFormat depthFormat,
                    VkQueue graphicsQueue, GraphicsInfo inf)
     : logDevice(logDevice), sc(logDevice, phyDevice, surface, inf.getFrameBufferSize),
-      command(logDevice, phyDevice, inf.framesInFlight),
-      vertex(BufferObj::optimizeForGPU(logDevice, phyDevice, sizeof(inf.verticesData[0]) * inf.verticesData.size(),
-                                       inf.verticesData.data(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, command,
-                                       graphicsQueue, static_cast<uint32_t>(inf.verticesData.size()))),
-      index(BufferObj::optimizeForGPU(logDevice, phyDevice, sizeof(inf.indicesData[0]) * inf.indicesData.size(),
-                                      inf.indicesData.data(), VK_BUFFER_USAGE_INDEX_BUFFER_BIT, command, graphicsQueue,
-                                      static_cast<uint32_t>(inf.indicesData.size()))),
-      pool(logDevice, inf.framesInFlight),
+      command(logDevice, phyDevice, inf.framesInFlight, inf.clearValue),
+      pool(logDevice, inf.models.size(), inf.framesInFlight),
       depth(logDevice, phyDevice, sc.extent, inf.multiSampleCount, depthFormat,
             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT),
       color(logDevice, phyDevice, sc.extent, inf.multiSampleCount, sc.format,
             VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_IMAGE_ASPECT_COLOR_BIT),
       sync(logDevice, inf.framesInFlight), depthFormat(depthFormat)
 {
+    std::set<VkPrimitiveTopology> requiredTopologies;
+    for (uint32_t i{0}; i < inf.models.size(); ++i)
+    {
+        vertices.push_back(new BufferObj(BufferObj::optimizeForGPU(
+            logDevice, phyDevice, sizeof(inf.models[i].verticesData[0]) * inf.models[i].verticesData.size(),
+            inf.models[i].verticesData.data(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, command, graphicsQueue,
+            static_cast<uint32_t>(inf.models[i].verticesData.size()))));
+        if (!inf.models[i].indicesData.empty())
+            indices.push_back(new BufferObj(BufferObj::optimizeForGPU(
+                logDevice, phyDevice, sizeof(inf.models[i].indicesData[0]) * inf.models[i].indicesData.size(),
+                inf.models[i].indicesData.data(), VK_BUFFER_USAGE_INDEX_BUFFER_BIT, command, graphicsQueue,
+                static_cast<uint32_t>(inf.models[i].indicesData.size()))));
+        else
+            indices.push_back(nullptr);
+        requiredTopologies.insert(inf.models[i].topology);
+    }
     ShaderObj vertexShader(logDevice, inf.vertShaderLocation, VK_SHADER_STAGE_VERTEX_BIT);
     ShaderObj fragmentShader(logDevice, inf.fragShaderLocation, VK_SHADER_STAGE_FRAGMENT_BIT);
     initRenderPass(logDevice, inf.multiSampleCount, depthFormat);
-    pUniforms.resize(inf.framesInFlight);
-    uniformMemoryPointers.resize(inf.framesInFlight);
-    for (uint8_t i{0}; i < inf.framesInFlight; i++)
+    pUniforms.resize(inf.framesInFlight * inf.models.size());
+    uniformMemoryPointers.resize(inf.framesInFlight * inf.models.size());
+    for (uint8_t i{0}; i < inf.framesInFlight * inf.models.size(); ++i)
     {
         pUniforms[i] =
             new BufferObj(logDevice, phyDevice, sizeof(UniformBufferObject), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         vkMapMemory(logDevice, pUniforms[i]->memory, 0, sizeof(UniformBufferObject), 0, &uniformMemoryPointers[i]);
     }
-    pipeline = new PipelineObj(logDevice, renderPass, pool, sc, {vertexShader.stageInfo, fragmentShader.stageInfo},
-                               inf.multiSampleCount, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-    initDescriptorSets(logDevice, inf.framesInFlight);
+    for (std::set<VkPrimitiveTopology>::iterator it = requiredTopologies.begin(); it != requiredTopologies.end(); ++it)
+    {
+        pipelines.push_back(new PipelineObj(logDevice, renderPass, pool, sc,
+                                            {vertexShader.stageInfo, fragmentShader.stageInfo}, inf.multiSampleCount,
+                                            *it));
+    }
+    initDescriptorSets(logDevice, inf.models.size(), inf.framesInFlight);
     initFrameBuffers(logDevice, inf.multiSampleCount);
 }
 
@@ -125,18 +139,18 @@ void Graphics::initRenderPass(VkDevice logDevice, VkSampleCountFlagBits multiSam
     vkCheck(vkCreateRenderPass(logDevice, &renderPassInfo, nullptr, &renderPass), "failed to create RenderPass");
 }
 
-void Graphics::initDescriptorSets(VkDevice logDevice, uint32_t fIF)
+void Graphics::initDescriptorSets(VkDevice logDevice, uint32_t modelSize, uint32_t fIF)
 {
-    std::vector<VkDescriptorSetLayout> layouts(fIF, pool.descriptorlayout);
+    std::vector<VkDescriptorSetLayout> layouts(fIF * modelSize, pool.descriptorlayout);
     VkDescriptorSetAllocateInfo dInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
         .descriptorPool = pool.descriptorPool,
-        .descriptorSetCount = fIF,
+        .descriptorSetCount = fIF * modelSize,
         .pSetLayouts = layouts.data(),
     };
-    descriptorSets.resize(fIF);
+    descriptorSets.resize(fIF * modelSize);
     vkCheck(vkAllocateDescriptorSets(logDevice, &dInfo, descriptorSets.data()), "failed to allocate descriptor sets");
-    for (uint8_t i{0}; i < fIF; i++)
+    for (uint32_t i{0}; i < fIF * modelSize; ++i)
     {
         VkDescriptorBufferInfo bufferInfo{
             .buffer = pUniforms[i]->buffer,
@@ -160,7 +174,7 @@ void Graphics::initFrameBuffers(VkDevice logDevice, VkSampleCountFlagBits multiS
 {
     uint32_t framebufferCount = sc.imageViews.size();
     frameBuffers.resize(framebufferCount);
-    for (uint8_t i{0}; i < framebufferCount; i++)
+    for (uint8_t i{0}; i < framebufferCount; ++i)
     {
         std::vector<VkImageView> attachments = {color.view, depth.view, sc.imageViews[i]};
         if (multiSampleCount == VK_SAMPLE_COUNT_1_BIT)
@@ -183,7 +197,7 @@ void Graphics::reinitSwapChain(VkPhysicalDevice phyDevice, VkSurfaceKHR surface,
 {
     vkDeviceWaitIdle(logDevice);
 
-    for (uint8_t i{0}; i < frameBuffers.size(); i++)
+    for (uint8_t i{0}; i < frameBuffers.size(); ++i)
     {
         vkDestroyFramebuffer(logDevice, frameBuffers[i], nullptr);
     }
@@ -214,23 +228,21 @@ void Graphics::draw(VkPhysicalDevice phyDevice, VkSurfaceKHR surface, GraphicsIn
         throw std::runtime_error("failed to get next SwapChain image");
     }
 
-    // update ubo
-    static auto startTime = std::chrono::high_resolution_clock::now();
-
-    auto currentTime = std::chrono::high_resolution_clock::now();
-    float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
-    UniformBufferObject ubo{};
-    ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-    ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-    ubo.proj = glm::perspective(glm::radians(45.0f), sc.extent.width / (float)sc.extent.height, 0.01f, 100.0f);
-    ubo.proj[1][1] *= -1;
-    memcpy(uniformMemoryPointers[currentFrame], &ubo, sizeof(ubo));
-
+    std::vector<VkDescriptorSet> requiredDescriptorSets;
+    std::vector<VkPrimitiveTopology> requiredTopologies;
+    for (uint32_t i{0}; i < inf.models.size(); ++i)
+    {
+        inf.models[i].updateUBO(inf.models[i].ubo, sc);
+        memcpy(uniformMemoryPointers[currentFrame + inf.framesInFlight * i], &inf.models[i].ubo,
+               sizeof(inf.models[i].ubo));
+        requiredDescriptorSets.push_back(descriptorSets[currentFrame + inf.framesInFlight * i]);
+        requiredTopologies.push_back(inf.models[i].topology);
+    }
     vkResetFences(logDevice, 1, &sync.processFences[currentFrame]);
 
     vkResetCommandBuffer(command.Buffers[currentFrame], 0);
-    command.record(pipeline, descriptorSets[currentFrame], vertex, index, renderPass, frameBuffers[imageIndex], sc,
-                   currentFrame);
+    command.record(pipelines, requiredDescriptorSets, vertices, indices, requiredTopologies, renderPass,
+                   frameBuffers[imageIndex], sc, currentFrame);
 
     VkSubmitInfo submitInfo{
         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -274,12 +286,20 @@ Graphics::~Graphics()
 {
     vkDeviceWaitIdle(logDevice);
     vkDestroyRenderPass(logDevice, renderPass, nullptr);
-    for (uint8_t i{0}; i < pUniforms.size(); i++)
+    for (uint32_t i{0}; i < pUniforms.size(); ++i)
     {
         delete pUniforms[i];
     }
-    delete pipeline;
-    for (uint8_t i{0}; i < frameBuffers.size(); i++)
+    for (uint32_t i{0}; i < vertices.size(); ++i)
+    {
+        delete vertices[i];
+        delete indices[i];
+    }
+    for (uint8_t i{0}; i < pipelines.size(); ++i)
+    {
+        delete pipelines[i];
+    }
+    for (uint8_t i{0}; i < frameBuffers.size(); ++i)
     {
         vkDestroyFramebuffer(logDevice, frameBuffers[i], nullptr);
     }
@@ -295,7 +315,7 @@ SyncObj::SyncObj(VkDevice logDevice, uint32_t fIF) : logDevice(logDevice)
         .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
         .flags = VK_FENCE_CREATE_SIGNALED_BIT,
     };
-    for (int8_t i{0}; i < fIF; i++)
+    for (int8_t i{0}; i < fIF; ++i)
     {
         vkCheck(vkCreateSemaphore(logDevice, &semaphoreInfo, nullptr, &imageSemaphores[i]),
                 "failed to create semaphore");
@@ -307,7 +327,7 @@ SyncObj::SyncObj(VkDevice logDevice, uint32_t fIF) : logDevice(logDevice)
 
 SyncObj::~SyncObj()
 {
-    for (int8_t i{0}; i < imageSemaphores.size(); i++)
+    for (int8_t i{0}; i < imageSemaphores.size(); ++i)
     {
         vkDestroySemaphore(logDevice, imageSemaphores[i], nullptr);
         vkDestroySemaphore(logDevice, renderSemaphores[i], nullptr);
@@ -371,7 +391,7 @@ PipelineObj::PipelineObj(VkDevice logDevice, VkRenderPass renderPass, Descriptor
         .depthClampEnable = VK_FALSE,
         .rasterizerDiscardEnable = VK_FALSE,
         .polygonMode = VK_POLYGON_MODE_FILL,
-        .cullMode = VK_CULL_MODE_BACK_BIT,
+        .cullMode = VK_CULL_MODE_NONE,
         .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
         .depthBiasEnable = VK_FALSE,
         .lineWidth = 1.0f,
@@ -439,15 +459,15 @@ PipelineObj::~PipelineObj()
     vkDestroyPipelineLayout(logDevice, layout, nullptr);
 }
 
-DescriptorPoolObj::DescriptorPoolObj(VkDevice logDevice, uint32_t fIF) : logDevice(logDevice)
+DescriptorPoolObj::DescriptorPoolObj(VkDevice logDevice, uint32_t modelSize, uint32_t fIF) : logDevice(logDevice)
 {
     VkDescriptorPoolSize poolSize{
         .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-        .descriptorCount = fIF,
+        .descriptorCount = fIF * modelSize,
     };
     VkDescriptorPoolCreateInfo poolInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .maxSets = fIF,
+        .maxSets = fIF * modelSize,
         .poolSizeCount = 1,
         .pPoolSizes = &poolSize,
     };
@@ -502,7 +522,7 @@ ImageObj::ImageObj(VkDevice logDevice, VkPhysicalDevice phyDevice, VkExtent2D ex
     bool vbMemoryTypeFound{false};
     VkPhysicalDeviceMemoryProperties memProperties;
     vkGetPhysicalDeviceMemoryProperties(phyDevice, &memProperties);
-    for (uint32_t i{0}; i < memProperties.memoryTypeCount; i++)
+    for (uint32_t i{0}; i < memProperties.memoryTypeCount; ++i)
     {
         if ((memRequirements.memoryTypeBits & (1 << i)) &&
             (memProperties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ==
@@ -568,7 +588,7 @@ BufferObj::BufferObj(VkDevice logDevice, VkPhysicalDevice phyDevice, VkDeviceSiz
     bool vbMemoryTypeFound{false};
     VkPhysicalDeviceMemoryProperties memProperties;
     vkGetPhysicalDeviceMemoryProperties(phyDevice, &memProperties);
-    for (uint32_t i{0}; i < memProperties.memoryTypeCount; i++)
+    for (uint32_t i{0}; i < memProperties.memoryTypeCount; ++i)
     {
         if ((memRequirements.memoryTypeBits & (1 << i)) &&
             (memProperties.memoryTypes[i].propertyFlags & properties) == properties)
@@ -646,7 +666,8 @@ BufferObj::~BufferObj()
     vkFreeMemory(logDevice, memory, nullptr);
 }
 
-CommandObj::CommandObj(VkDevice logDevice, VkPhysicalDevice phyDevice, uint32_t framesInFlight) : logDevice(logDevice)
+CommandObj::CommandObj(VkDevice logDevice, VkPhysicalDevice phyDevice, uint32_t framesInFlight, VkClearValue clearValue)
+    : logDevice(logDevice), clearValue(clearValue)
 {
     // get graphics family
     uint32_t queueFamilyCount{0};
@@ -684,8 +705,10 @@ CommandObj::CommandObj(VkDevice logDevice, VkPhysicalDevice phyDevice, uint32_t 
     vkCheck(vkAllocateCommandBuffers(logDevice, &cbInfo, Buffers.data()), "failed to create command buffers");
 }
 
-void CommandObj::record(PipelineObj *pipeline, VkDescriptorSet descriptorSet, BufferObj &vertexBuf, BufferObj &indexBuf,
-                        VkRenderPass renderPass, VkFramebuffer frameBuffer, SwapChainObj &sc, uint32_t currentcb)
+void CommandObj::record(std::vector<PipelineObj *> pipelines, std::vector<VkDescriptorSet> descriptorSets,
+                        std::vector<BufferObj *> vertexBuf, std::vector<BufferObj *> indexBuf,
+                        std::vector<VkPrimitiveTopology> topologies, VkRenderPass renderPass, VkFramebuffer frameBuffer,
+                        SwapChainObj &sc, uint32_t currentcb)
 {
     vkCheck(vkBeginCommandBuffer(Buffers[currentcb],
                                  new VkCommandBufferBeginInfo({.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO})),
@@ -720,15 +743,30 @@ void CommandObj::record(PipelineObj *pipeline, VkDescriptorSet descriptorSet, Bu
     };
     vkCmdBeginRenderPass(Buffers[currentcb], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-    vkCmdBindPipeline(Buffers[currentcb], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pl);
-    vkCmdSetViewport(Buffers[currentcb], 0, 1, &viewport);
-    vkCmdSetScissor(Buffers[currentcb], 0, 1, &scissor);
-    vkCmdBindVertexBuffers(Buffers[currentcb], 0, 1, &vertexBuf.buffer, new VkDeviceSize(0));
-    vkCmdBindDescriptorSets(Buffers[currentcb], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->layout, 0, 1, &descriptorSet,
-                            0, nullptr);
-    vkCmdBindIndexBuffer(Buffers[currentcb], indexBuf.buffer, 0, VK_INDEX_TYPE_UINT32);
-    vkCmdDrawIndexed(Buffers[currentcb], indexBuf.Count, 1, 0, 0, 0);
-
+    for (uint32_t i{0}; i < vertexBuf.size(); ++i)
+    {
+        PipelineObj *pipeline;
+        for (uint8_t j{0}; j < pipelines.size(); ++j)
+        {
+            if (topologies[i] == pipelines[j]->topology)
+                pipeline = pipelines[j];
+        }
+        vkCmdBindPipeline(Buffers[currentcb], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pl);
+        vkCmdSetViewport(Buffers[currentcb], 0, 1, &viewport);
+        vkCmdSetScissor(Buffers[currentcb], 0, 1, &scissor);
+        vkCmdBindVertexBuffers(Buffers[currentcb], 0, 1, &vertexBuf[i]->buffer, new VkDeviceSize(0));
+        vkCmdBindDescriptorSets(Buffers[currentcb], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->layout, 0, 1,
+                                &descriptorSets[i], 0, nullptr);
+        if (indexBuf[i] != nullptr)
+        {
+            vkCmdBindIndexBuffer(Buffers[currentcb], indexBuf[i]->buffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(Buffers[currentcb], indexBuf[i]->Count, 1, 0, 0, 0);
+        }
+        else
+        {
+            vkCmdDraw(Buffers[currentcb], vertexBuf[i]->Count, 1, 0, 0);
+        }
+    }
     vkCmdEndRenderPass(Buffers[currentcb]);
     vkCheck(vkEndCommandBuffer(Buffers[currentcb]), "failed to record buffer");
 }

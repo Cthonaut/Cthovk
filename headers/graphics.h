@@ -53,14 +53,16 @@ struct CommandObj
 {
     VkCommandPool Pool;
     std::vector<VkCommandBuffer> Buffers;
-    VkClearValue clearValue = {{{0.005f, 0.0f, 0.01f, 1.0f}}};
+    VkClearValue clearValue = {{{0.0f, 0.0f, 0.0f, 1.0f}}};
     VkDevice logDevice;
 
-    CommandObj(VkDevice logDevice, VkPhysicalDevice phyDevice, uint32_t framesInFlight);
+    CommandObj(VkDevice logDevice, VkPhysicalDevice phyDevice, uint32_t framesInFlight, VkClearValue clearValue);
     ~CommandObj();
 
-    void record(PipelineObj *pipeline, VkDescriptorSet descriptorSet, BufferObj &vertexBuf, BufferObj &indexBuf,
-                VkRenderPass renderPass, VkFramebuffer frameBuffer, SwapChainObj &sc, uint32_t currentcb);
+    void record(std::vector<PipelineObj *> pipelines, std::vector<VkDescriptorSet> descriptorSet,
+                std::vector<BufferObj *> vertexBuf, std::vector<BufferObj *> indexBuf,
+                std::vector<VkPrimitiveTopology> topologies, VkRenderPass renderPass, VkFramebuffer frameBuffer,
+                SwapChainObj &sc, uint32_t currentcb);
 };
 
 struct BufferObj
@@ -97,7 +99,7 @@ struct DescriptorPoolObj
     VkDescriptorSetLayout descriptorlayout;
     VkDevice logDevice;
 
-    DescriptorPoolObj(VkDevice logDevice, uint32_t fIF);
+    DescriptorPoolObj(VkDevice logDevice, uint32_t modelSize, uint32_t fIF);
     ~DescriptorPoolObj();
 };
 
@@ -167,6 +169,16 @@ struct UniformBufferObject
     glm::mat4 proj;
 };
 
+struct Model
+{
+    std::vector<Vertex> verticesData{};
+    std::vector<uint32_t> indicesData{};
+    VkPrimitiveTopology topology{};
+    UniformBufferObject ubo{};
+    std::function<void(UniformBufferObject &ubo, Cthovk::SwapChainObj &sc)> updateUBO =
+        [&](Cthovk::UniformBufferObject &ubo, Cthovk::SwapChainObj &sc) {};
+};
+
 struct GraphicsInfo
 {
     std::function<void(uint32_t &width, uint32_t &height)> getFrameBufferSize;
@@ -174,8 +186,8 @@ struct GraphicsInfo
     std::string fragShaderLocation;
     VkSampleCountFlagBits multiSampleCount;
     uint32_t framesInFlight;
-    std::vector<Vertex> verticesData;
-    std::vector<uint32_t> indicesData;
+    std::vector<Model> models;
+    VkClearValue clearValue;
 };
 
 class Graphics
@@ -194,14 +206,14 @@ class Graphics
     std::vector<ShaderObj> shaders;
     VkRenderPass renderPass;
     CommandObj command;
-    BufferObj vertex;
-    BufferObj index;
+    std::vector<BufferObj *> vertices;
+    std::vector<BufferObj *> indices;
     std::vector<BufferObj *> pUniforms;
     std::vector<void *> uniformMemoryPointers;
     ImageObj depth;
     ImageObj color;
     DescriptorPoolObj pool;
-    PipelineObj *pipeline;
+    std::vector<PipelineObj *> pipelines;
     std::vector<VkDescriptorSet> descriptorSets;
     std::vector<VkFramebuffer> frameBuffers;
     SyncObj sync;
@@ -210,7 +222,7 @@ class Graphics
     VkFormat depthFormat;
 
     void initRenderPass(VkDevice logDevice, VkSampleCountFlagBits multiSampleCount, VkFormat depthFormat);
-    void initDescriptorSets(VkDevice logDevice, uint32_t fIF);
+    void initDescriptorSets(VkDevice logDevice, uint32_t modelCount, uint32_t fIF);
     void initFrameBuffers(VkDevice logDevice, VkSampleCountFlagBits multiSampleCount);
     void reinitSwapChain(VkPhysicalDevice phyDevice, VkSurfaceKHR surface, GraphicsInfo inf);
 };
